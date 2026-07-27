@@ -24,12 +24,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", required=True, help="text file, one ICAO per line")
     ap.add_argument("--out", required=True, help="output directory for <ICAO>.json files")
+    ap.add_argument("--skip-existing", action="store_true",
+                     help="skip ICAOs that already have a <ICAO>.json in --out")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
 
     with open(args.file, "r", encoding="utf-8") as f:
         icaos = [line.strip().upper() for line in f if line.strip()]
+
+    if args.skip_existing:
+        before = len(icaos)
+        icaos = [i for i in icaos if not os.path.exists(os.path.join(args.out, f"{i}.json"))]
+        print(f"Skipping {before - len(icaos)} already-converted airport(s).")
 
     ok, failed = [], []
     total = len(icaos)
