@@ -26,6 +26,20 @@
 (function () {
     'use strict';
 
+    // Page-world GeoFS (Tampermonkey sandbox cannot always see bare `geofs`)
+    function pageGeofs() {
+        try {
+            if (typeof unsafeWindow !== 'undefined' && unsafeWindow.geofs) return unsafeWindow.geofs;
+        } catch (e) { /* ignore */ }
+        try {
+            if (typeof window !== 'undefined' && window.geofs) return window.geofs;
+        } catch (e) { /* ignore */ }
+        try {
+            if (typeof geofs !== 'undefined') return geofs;
+        } catch (e) { /* ignore */ }
+        return null;
+    }
+
     // ------------------------------- storage keys -------------------------------
     const STORAGE = {
         PROFILE: 'aerodeck_profile',
@@ -302,14 +316,23 @@
     }
     function detectCurrentAircraft() {
         try {
-            const inst = geofs.aircraft.instance;
-            const id = inst && inst.id;
-            if (id == null) return null;
+            const g = pageGeofs();
+            if (!g || !g.aircraft || !g.aircraft.instance) return null;
+            const inst = g.aircraft.instance;
+            const id = inst.id;
+            if (id == null || id === '') return null;
             let name = null;
-            try { name = (geofs.aircraftList && geofs.aircraftList[id] && geofs.aircraftList[id].name) || null; } catch (e) { /* ignore */ }
+            try {
+                const list = g.aircraftList || {};
+                const entry = list[id] || list[String(id)] || list[Number(id)];
+                if (entry && entry.name) name = entry.name;
+            } catch (e) { /* ignore */ }
+            if (!name) {
+                try { name = inst.aircraftName || inst.name || (inst.definition && inst.definition.name) || null; } catch (e) { /* ignore */ }
+            }
             const group = getAircraftGroup(id);
             const capacity = GROUP_CAPACITY[group] != null ? GROUP_CAPACITY[group] : 150;
-            return { id, name: name || `Aircraft #${id}`, group, capacity };
+            return { id, name: name || ('Aircraft #' + id), group, capacity };
         } catch (e) { return null; }
     }
 
@@ -386,7 +409,7 @@
     let presenceBroadcastTimer = null;
     let cachedPresence = [];
     let lastPresenceFetch = 0;
-    let backendReachable = null; 
+    let backendReachable = null;
     let chatEnabled = false;
     let chatMessages = [];
     let lastChatFetch = 0;
@@ -910,7 +933,7 @@
         _lastLowWarn: 0,
         _maybeLowFuelWarn() {
             const now = Date.now();
-            if (now - this._lastLowWarn < 120000) return; 
+            if (now - this._lastLowWarn < 120000) return;
             try {
                 if (!flight.active || !flight.destination) return;
                 const pos = getCurrentLatLon();
@@ -2380,6 +2403,7 @@ function applySimbriefToFlight() {
         }
     }
     function renderAircraftTab(container) {
+        ensureAircraftDetected(true);
         const doorsHtml = flight.doors.length
             ? `${buildDoorsDiagramHtml(flight.doors)}
                <div style="display:flex;gap:8px;margin-top:8px;">
