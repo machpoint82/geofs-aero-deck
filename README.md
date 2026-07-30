@@ -202,45 +202,10 @@ Use GitHub Issues so requests stay searchable and don’t get lost in chat.
 | **Bug report** | Something broken in GeoFS with AeroDeck | [New issue](https://github.com/machpoint82/geofs-aero-deck/issues/new) |
 
 Before opening a chart request, check whether `charts/YOURICAO.json` already exists and whether someone already filed the same ICAO.
-
-
+Currently 548 Airports charts are supported. See [Airports List](Airports Coverage.txt) for full airports list
+                                                 [Airports ICAO](airports.txt)
 ---
 
-## Multiplayer & chat backend (optional)
-
-AeroDeck can share presence and chat over a small private backend so only **AeroDeck users** appear on the map/charts and in chat — not every GeoFS multiplayer client. If the backend URL is not configured, those features simply stay offline; the rest of the EFB works normally.
-
----
-
-## Repository structure
-
-```
-geofs-aero-deck/
-├── .github/
-│   └── ISSUE_TEMPLATE/
-│       ├── airport-chart-request.md
-│       └── feature-request.md
-├── charts/                 # One JSON diagram per airport (e.g. KLAX.json)
-├── data/
-│   ├── airports.js         # Airport reference data (@require)
-│   └── airlines.js         # Airline reference data (@require)
-├── preview/                # README screenshots + app icon
-│   ├── icon.png
-│   ├── home.png
-│   ├── flight.png
-│   ├── ofp.png
-│   ├── aircraft.png
-│   ├── nav.png
-│   ├── charts.png
-│   ├── map.png
-│   ├── checklist.png
-│   ├── settings.png
-│   └── minimized.png
-├── aerodeck-efb.js         # Main Tampermonkey userscript
-└── README.md
-```
-
----
 
 ## Performance notes
 
@@ -259,7 +224,7 @@ Built by **[machpoint82](https://github.com/machpoint82)**
 - Weather from [aviationweather.gov](https://aviationweather.gov/) and [VATSIM](https://metar.vatsim.net/)
 - Flight planning data via [SimBrief](https://www.simbrief.com/)
 - Map tiles © [OpenStreetMap](https://www.openstreetmap.org/) contributors, rendered with [Leaflet](https://leafletjs.com/)
-- Aircraft icons injection inspired by **Experimental Flight Interface (EFI)** by [Ferhatduran55](https://github.com/Ferhatduran55) — [geofs-experimental-fi](https://github.com/Ferhatduran55/geofs-experimental-fi).
+- Aircraft icons from **Experimental Flight Interface (EFI)** by [Ferhatduran55](https://github.com/Ferhatduran55) — [geofs-experimental-fi](https://github.com/Ferhatduran55/geofs-experimental-fi).
 
 ---
 
