@@ -79,7 +79,7 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 - Aircraft mismatch prompt if the OFP type does not match the plane you are flying
 
 <p align="center">
-  <img src="preview/flight.png" alt="Flight tab" width="720" />
+  <img src="preview/ofp.png" alt="OFP tab" width="720" />
 </p>
 <p align="center"><em>Flight — airline lookup, origin/destination, auto-detected aircraft</em></p>
 
@@ -91,7 +91,7 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 - Boarding is handled on the **Aircraft** tab (pax target is pre-filled from the OFP when available)
 
 <p align="center">
-  <img src="preview/ofp.png" alt="OFP tab" width="720" />
+  <img src="preview/flight.png" alt="Flight tab" width="720" />
 </p>
 <p align="center"><em>OFP — SimBrief import with weights, times, and planned fuel</em></p>
 
@@ -220,14 +220,6 @@ geofs-aero-deck/
 ├── aerodeck-efb.js         # Main Tampermonkey userscript
 └── README.md
 ```
-
-Userscript header `@icon` should point at the raw GitHub file, for example:
-
-```text
-// @icon  https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/preview/icon.png
-```
-
-(Adjust the branch name if you use something other than `main`.)
 
 ---
 
