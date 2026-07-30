@@ -47,9 +47,8 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 ## Installation
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) (or a compatible userscript manager).
-2. [Install AeroDeck with Tampermonkey](https://cdn.jsdelivr.net/gh/machpoint82/geofs-aero-deck@v1.0.0/aerodeck-efb.js)  
+2. click on [this link](https://github.com/machpoint82/geofs-aero-deck/releases/latest/download/aerodeck-efb.user.js), It redirects you to the installation page.
    (or download from [Releases](https://github.com/machpoint82/geofs-aero-deck/releases/latest) and open the `.user.js` file).
- Or click on [this link](https://github.com/machpoint82/geofs-aero-deck/releases/latest/download/aerodeck-efb.user.js), It redirects you to the installation page.
 3. Open [GeoFS](https://www.geo-fs.com/). An **EFB** control appears with the other GeoFS UI buttons.
 4. Open the tablet. First launch asks for a pilot name. Your **Pilot ID** is generated once and ties to your logbook and career stats.
 
