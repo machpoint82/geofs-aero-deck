@@ -36,6 +36,7 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
   - [History](#history)
   - [Settings](#settings)
 - [The tablet itself](#the-tablet-itself)
+- [Requests & issues](#requests--issues)
 - [Multiplayer & chat backend (optional)](#multiplayer--chat-backend-optional)
 - [Repository structure](#repository-structure)
 - [Performance notes](#performance-notes)
@@ -46,7 +47,7 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 ## Installation
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) (or a compatible userscript manager).
-2. Install the AeroDeck script from this repo — open the raw userscript and Tampermonkey will pick it up, or use a release asset if published.
+2. Install the AeroDeck script from this repo — open the [raw userscript](https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.js) and Tampermonkey will pick it up, or use a release asset if published.
 3. Open [GeoFS](https://www.geo-fs.com/). An **EFB** control appears with the other GeoFS UI buttons.
 4. Open the tablet. First launch asks for a pilot name. Your **Pilot ID** is generated once and ties to your logbook and career stats.
 
@@ -79,7 +80,7 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 - Aircraft mismatch prompt if the OFP type does not match the plane you are flying
 
 <p align="center">
-  <img src="preview/ofp.png" alt="OFP tab" width="720" />
+  <img src="preview/flight.png" alt="Flight tab" width="720" />
 </p>
 <p align="center"><em>Flight — airline lookup, origin/destination, auto-detected aircraft</em></p>
 
@@ -91,7 +92,7 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 - Boarding is handled on the **Aircraft** tab (pax target is pre-filled from the OFP when available)
 
 <p align="center">
-  <img src="preview/flight.png" alt="Flight tab" width="720" />
+  <img src="preview/ofp.png" alt="OFP tab" width="720" />
 </p>
 <p align="center"><em>OFP — SimBrief import with weights, times, and planned fuel</em></p>
 
@@ -121,7 +122,7 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 - Airport diagrams (apron, taxiways, runways, gates, COM frequencies)
 - Origin / destination / search modes
 - Your aircraft (yellow) and other AeroDeck pilots (blue) on the diagram
-- Missing charts: request them via the repo **Issues** tab — coverage grows over time
+- Coverage grows over time — see [Requests & issues](#requests--issues) to ask for an airport
 
 <p align="center">
   <img src="preview/charts.png" alt="Charts tab" width="720" />
@@ -189,6 +190,22 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 
 ---
 
+## Requests & issues
+
+Use GitHub Issues so requests stay searchable and don’t get lost in chat.
+
+| Type | Use when | Open |
+|------|----------|------|
+| **Airport chart request** | You need a diagram for an ICAO that isn’t in `charts/` yet | [New chart request](https://github.com/machpoint82/geofs-aero-deck/issues/new?template=airport-chart-request.md) |
+| **Feature request** | Idea for the tablet, tabs, SimBrief, multiplayer, etc. | [New feature request](https://github.com/machpoint82/geofs-aero-deck/issues/new?template=feature-request.md) |
+| **Bug report** | Something broken in GeoFS with AeroDeck | [New issue](https://github.com/machpoint82/geofs-aero-deck/issues/new) |
+
+Before opening a chart request, check whether `charts/YOURICAO.json` already exists and whether someone already filed the same ICAO.
+
+Templates live in `.github/ISSUE_TEMPLATE/` once you push that folder.
+
+---
+
 ## Multiplayer & chat backend (optional)
 
 AeroDeck can share presence and chat over a small private backend so only **AeroDeck users** appear on the map/charts and in chat — not every GeoFS multiplayer client. If the backend URL is not configured, those features simply stay offline; the rest of the EFB works normally.
@@ -199,12 +216,14 @@ AeroDeck can share presence and chat over a small private backend so only **Aero
 
 ```
 geofs-aero-deck/
+├── .github/
+│   └── ISSUE_TEMPLATE/
+│       ├── airport-chart-request.md
+│       └── feature-request.md
 ├── charts/                 # One JSON diagram per airport (e.g. KLAX.json)
 ├── data/
 │   ├── airports.js         # Airport reference data (@require)
 │   └── airlines.js         # Airline reference data (@require)
-├── geofs-aero-deck/
-│   └── airports.txt        # Auxiliary / source lists as needed
 ├── preview/                # README screenshots + app icon
 │   ├── icon.png
 │   ├── home.png
