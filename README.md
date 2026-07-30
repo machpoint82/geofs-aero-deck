@@ -47,7 +47,9 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 ## Installation
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) (or a compatible userscript manager).
-2. Install the AeroDeck script from this repo — open the [raw userscript](https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.js) and Tampermonkey will pick it up, or use a release asset if published.
+2. [Install AeroDeck with Tampermonkey](https://cdn.jsdelivr.net/gh/machpoint82/geofs-aero-deck@v1.0.0/aerodeck-efb.js)  
+   (or download from [Releases](https://github.com/machpoint82/geofs-aero-deck/releases/latest) and open the `.user.js` file).
+ Or click on [this link](https://github.com/machpoint82/geofs-aero-deck/releases/latest/download/aerodeck-efb.user.js), It redirects you to the installation page.
 3. Open [GeoFS](https://www.geo-fs.com/). An **EFB** control appears with the other GeoFS UI buttons.
 4. Open the tablet. First launch asks for a pilot name. Your **Pilot ID** is generated once and ties to your logbook and career stats.
 
@@ -80,7 +82,7 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 - Aircraft mismatch prompt if the OFP type does not match the plane you are flying
 
 <p align="center">
-  <img src="preview/flight.png" alt="Flight tab" width="720" />
+  <img src="preview/ofp.png" alt="OFP tab" width="720" />
 </p>
 <p align="center"><em>Flight — airline lookup, origin/destination, auto-detected aircraft</em></p>
 
@@ -92,7 +94,7 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 - Boarding is handled on the **Aircraft** tab (pax target is pre-filled from the OFP when available)
 
 <p align="center">
-  <img src="preview/ofp.png" alt="OFP tab" width="720" />
+  <img src="preview/flight.png" alt="Flight tab" width="720" />
 </p>
 <p align="center"><em>OFP — SimBrief import with weights, times, and planned fuel</em></p>
 
@@ -202,7 +204,6 @@ Use GitHub Issues so requests stay searchable and don’t get lost in chat.
 
 Before opening a chart request, check whether `charts/YOURICAO.json` already exists and whether someone already filed the same ICAO.
 
-Templates live in `.github/ISSUE_TEMPLATE/` once you push that folder.
 
 ---
 
@@ -259,10 +260,7 @@ Built by **[machpoint82](https://github.com/machpoint82)**
 - Weather from [aviationweather.gov](https://aviationweather.gov/) and [VATSIM](https://metar.vatsim.net/)
 - Flight planning data via [SimBrief](https://www.simbrief.com/)
 - Map tiles © [OpenStreetMap](https://www.openstreetmap.org/) contributors, rendered with [Leaflet](https://leafletjs.com/)
-
-### Related projects
-
-- Fuel-system ideas and GeoFS instrumentation patterns inspired by **Experimental Flight Interface (EFI)** by [Ferhatduran55](https://github.com/Ferhatduran55) — [geofs-experimental-fi](https://github.com/Ferhatduran55/geofs-experimental-fi).
+- Aircraft icons injection inspired by **Experimental Flight Interface (EFI)** by [Ferhatduran55](https://github.com/Ferhatduran55) — [geofs-experimental-fi](https://github.com/Ferhatduran55/geofs-experimental-fi).
 
 ---
 
