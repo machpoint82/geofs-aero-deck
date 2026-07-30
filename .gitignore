@@ -1,4 +1,0 @@
-'tools/' 
-'apt_dat_to_json.py' 
-'geofs_charts_bulk_fetch.py' 
--e 'tools/\napt_dat_to_json.py\ngeofs_charts_bulk_fetch.py' 
