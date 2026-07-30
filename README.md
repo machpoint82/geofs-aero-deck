@@ -202,7 +202,7 @@ Use GitHub Issues so requests stay searchable and don’t get lost in chat.
 | **Bug report** | Something broken in GeoFS with AeroDeck | [New issue](https://github.com/machpoint82/geofs-aero-deck/issues/new) |
 
 Before opening a chart request, check whether `charts/YOURICAO.json` already exists and whether someone already filed the same ICAO.
-Currently 1000+ Airports charts are supported. See [Airports List](Airports Coverage.txt) for full airports list
+Currently 1000+ Airports charts are supported. See [Airports List](Airports%20Coverage.txt) for full airports list
                                                    [Airports ICAO](airports.txt)
 ---
 
