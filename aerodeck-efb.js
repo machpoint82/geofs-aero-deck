@@ -2,6 +2,8 @@
 // @name         AeroDeck EFB
 // @namespace    http://tampermonkey.net/
 // @version      1.0.0
+// @updateURL    https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.js
+// @downloadURL  https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.js
 // @description  Airline operations EFB for GeoFS.
 // @author       machpoint82
 // @match        *://www.geo-fs.com/*
@@ -60,6 +62,13 @@
     const LOGO_URL = (iata) => `https://images.kiwi.com/airlines/64/${iata}.png`;
     const MAX_HISTORY = 200;
     const METAR_CACHE_MS = 10 * 60 * 1000;
+
+    // Keep in sync with // @version above
+    const SCRIPT_VERSION = '1.0.0';
+    const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.js';
+    const RELEASES_URL = 'https://github.com/machpoint82/geofs-aero-deck/releases/latest';
+    let remoteVersion = null;
+    let versionCheckDone = false;
 
     // ------------------------------- storage helpers -------------------------------
     function gmGet(key, fallback) {
@@ -303,16 +312,127 @@
         turbopropCommuter: ["247", "1013", "1020", "2418", "2420", "2426", "2892", "2943", "3289", "3436"]
     };
     const GROUP_CAPACITY = {
-        wideBody4Engine: 550, narrowBody4Engine: 180, trijet: 180,
-        twinjetWideBody: 300, heavyCargo: 0, twinjetNarrowBody: 180,
-        regionalJet: 90, turbopropCommuter: 70, twinTurboprop: 50,
+        wideBody4Engine: 400, narrowBody4Engine: 180, trijet: 250,
+        twinjetWideBody: 280, heavyCargo: 0, twinjetNarrowBody: 180,
+        regionalJet: 90, turbopropCommuter: 60, twinTurboprop: 19,
         businessJet: 12, twinPistonEngine: 6, singleEngine: 4,
         fighter: 1, fighterJet: 1, glider: 1
     };
+    // Per-aircraft-TYPE table, matched against the live aircraft name string from
+    // geofs.aircraftList (not the numeric id — GeoFS keeps adding new ids/variants
+    // that a static id list can never keep up with, which is what caused things
+    // like the 747 silently falling back to the 150-pax default).
+    // Checked top to bottom, first match wins — so put more specific variants
+    // (e.g. "747-8i") above the more generic ones (e.g. plain "747").
+    // capacity: 0 is used for pure freighters/cargo variants.
+    const AIRCRAFT_TYPE_TABLE = [
+        // --- freighters / cargo / non-passenger first, so they never inherit a pax figure ---
+        { re: /747.*(LCF|dreamlifter)/i, capacity: 0, group: 'heavyCargo' },
+        { re: /747.*-?8f|747.*freighter/i, capacity: 0, group: 'heavyCargo' },
+        { re: /an-?225/i, capacity: 0, group: 'heavyCargo' },
+        { re: /an-?124/i, capacity: 0, group: 'heavyCargo' },
+        { re: /il-?76/i, capacity: 0, group: 'heavyCargo' },
+        { re: /c-5\b/i, capacity: 0, group: 'heavyCargo' },
+        { re: /c-17\b/i, capacity: 0, group: 'heavyCargo' },
+        { re: /md-?11.*f\b|md-?11.*freighter/i, capacity: 0, group: 'heavyCargo' },
+
+        // --- Boeing 747 family ---
+        { re: /747.*-?8i/i, capacity: 467, group: 'wideBody4Engine' },
+        { re: /747sp/i, capacity: 289, group: 'wideBody4Engine' },
+        { re: /747.*-?400d/i, capacity: 568, group: 'wideBody4Engine' },
+        { re: /747.*-?400/i, capacity: 416, group: 'wideBody4Engine' },
+        { re: /747.*-?100/i, capacity: 452, group: 'wideBody4Engine' },
+        { re: /747/i, capacity: 400, group: 'wideBody4Engine' },
+
+        // --- Airbus A340 family (4-engine, but distinct from the 747) ---
+        { re: /a340.*-?600/i, capacity: 380, group: 'wideBody4Engine' },
+        { re: /a340.*-?500/i, capacity: 313, group: 'wideBody4Engine' },
+        { re: /a340.*-?300/i, capacity: 295, group: 'wideBody4Engine' },
+        { re: /a340/i, capacity: 300, group: 'wideBody4Engine' },
+
+        // --- other 4-engine widebodies ---
+        { re: /a380/i, capacity: 525, group: 'wideBody4Engine' },
+        { re: /il-?86/i, capacity: 350, group: 'wideBody4Engine' },
+
+        // --- Boeing 777 ---
+        { re: /777.*-?300er/i, capacity: 396, group: 'twinjetWideBody' },
+        { re: /777.*-?300/i, capacity: 368, group: 'twinjetWideBody' },
+        { re: /777.*-?200/i, capacity: 314, group: 'twinjetWideBody' },
+        { re: /777/i, capacity: 350, group: 'twinjetWideBody' },
+
+        // --- Boeing 787 ---
+        { re: /787.*-?10/i, capacity: 336, group: 'twinjetWideBody' },
+        { re: /787.*-?9/i, capacity: 296, group: 'twinjetWideBody' },
+        { re: /787.*-?8/i, capacity: 242, group: 'twinjetWideBody' },
+        { re: /787/i, capacity: 270, group: 'twinjetWideBody' },
+
+        // --- Airbus A350 ---
+        { re: /a350.*-?1000/i, capacity: 366, group: 'twinjetWideBody' },
+        { re: /a350.*-?900/i, capacity: 325, group: 'twinjetWideBody' },
+        { re: /a350/i, capacity: 325, group: 'twinjetWideBody' },
+
+        // --- Airbus A330 ---
+        { re: /a330.*-?900/i, capacity: 287, group: 'twinjetWideBody' },
+        { re: /a330.*-?300/i, capacity: 277, group: 'twinjetWideBody' },
+        { re: /a330.*-?200/i, capacity: 247, group: 'twinjetWideBody' },
+        { re: /a330/i, capacity: 260, group: 'twinjetWideBody' },
+
+        // --- MD-11 / DC-10 (trijets) ---
+        { re: /md-?11/i, capacity: 293, group: 'trijet' },
+        { re: /dc-?10/i, capacity: 270, group: 'trijet' },
+
+        // --- Boeing 767 / 757 ---
+        { re: /767.*-?300/i, capacity: 218, group: 'twinjetWideBody' },
+        { re: /767/i, capacity: 200, group: 'twinjetWideBody' },
+        { re: /757.*-?300/i, capacity: 243, group: 'twinjetNarrowBody' },
+        { re: /757/i, capacity: 200, group: 'twinjetNarrowBody' },
+
+        // --- Boeing 737 family ---
+        { re: /737.*max ?8/i, capacity: 189, group: 'twinjetNarrowBody' },
+        { re: /737.*-?800/i, capacity: 189, group: 'twinjetNarrowBody' },
+        { re: /737.*-?600/i, capacity: 132, group: 'twinjetNarrowBody' },
+        { re: /737.*-?200/i, capacity: 130, group: 'twinjetNarrowBody' },
+        { re: /737/i, capacity: 160, group: 'twinjetNarrowBody' },
+
+        // --- Airbus A320 family ---
+        { re: /a321neo|a321lr/i, capacity: 206, group: 'twinjetNarrowBody' },
+        { re: /a321/i, capacity: 220, group: 'twinjetNarrowBody' },
+        { re: /a320neo/i, capacity: 180, group: 'twinjetNarrowBody' },
+        { re: /a320/i, capacity: 180, group: 'twinjetNarrowBody' },
+        { re: /a319neo/i, capacity: 156, group: 'twinjetNarrowBody' },
+        { re: /a319/i, capacity: 156, group: 'twinjetNarrowBody' },
+        { re: /a318/i, capacity: 132, group: 'twinjetNarrowBody' },
+        { re: /a220.*-?300/i, capacity: 140, group: 'twinjetNarrowBody' },
+        { re: /a220/i, capacity: 120, group: 'twinjetNarrowBody' },
+
+        // --- BAe 146 / Avro RJ ---
+        { re: /rj ?100/i, capacity: 112, group: 'regionalJet' },
+        { re: /bae ?146/i, capacity: 100, group: 'regionalJet' },
+
+        // --- E-Jets ---
+        { re: /e195/i, capacity: 132, group: 'regionalJet' },
+        { re: /e190/i, capacity: 114, group: 'regionalJet' },
+        { re: /e175/i, capacity: 88, group: 'regionalJet' },
+        { re: /e170/i, capacity: 78, group: 'regionalJet' },
+
+        // --- CRJ ---
+        { re: /crj.*900/i, capacity: 90, group: 'regionalJet' },
+        { re: /crj.*700/i, capacity: 70, group: 'regionalJet' },
+        { re: /crj/i, capacity: 50, group: 'regionalJet' },
+
+        // --- Turboprops ---
+        { re: /atr ?72/i, capacity: 70, group: 'turbopropCommuter' },
+        { re: /atr ?42/i, capacity: 48, group: 'turbopropCommuter' }
+    ];
     function getAircraftGroup(id) {
         const key = String(id);
         for (const g in AIRCRAFT_GROUPS) if (AIRCRAFT_GROUPS[g].includes(key)) return g;
         return 'default';
+    }
+    function getTypeInfoFromName(name) {
+        if (!name) return null;
+        for (const entry of AIRCRAFT_TYPE_TABLE) if (entry.re.test(name)) return entry;
+        return null;
     }
     function detectCurrentAircraft() {
         try {
@@ -330,8 +450,19 @@
             if (!name) {
                 try { name = inst.aircraftName || inst.name || (inst.definition && inst.definition.name) || null; } catch (e) { /* ignore */ }
             }
-            const group = getAircraftGroup(id);
-            const capacity = GROUP_CAPACITY[group] != null ? GROUP_CAPACITY[group] : 150;
+            // Prefer a match on the real aircraft name/variant — this is what actually
+            // distinguishes a 747 from an A340 from a 737, and stays correct even for
+            // new aircraft GeoFS adds later. Only fall back to the old numeric-id group
+            // list (and finally a flat default) if the name doesn't match anything.
+            const typeInfo = getTypeInfoFromName(name);
+            let group, capacity;
+            if (typeInfo) {
+                group = typeInfo.group;
+                capacity = typeInfo.capacity;
+            } else {
+                group = getAircraftGroup(id);
+                capacity = GROUP_CAPACITY[group] != null ? GROUP_CAPACITY[group] : 150;
+            }
             return { id, name: name || ('Aircraft #' + id), group, capacity };
         } catch (e) { return null; }
     }
@@ -490,7 +621,70 @@
     }
     function normalizeNameKey(name) { return name.trim().toLowerCase().replace(/[.#$\[\]\/]/g, '_').replace(/\s+/g, '_').slice(0, 60); }
 
+    function versionParts(v) {
+        return String(v || '0').split('.').map((n) => parseInt(n, 10) || 0);
+    }
+    function isUpdateAvailable() {
+        if (!remoteVersion) return false;
+        const a = versionParts(SCRIPT_VERSION), b = versionParts(remoteVersion);
+        for (let i = 0; i < Math.max(a.length, b.length); i++) {
+            const x = a[i] || 0, y = b[i] || 0;
+            if (y > x) return true;
+            if (y < x) return false;
+        }
+        return false;
+    }
+    async function checkForUpdate() {
+        if (versionCheckDone) return;
+        versionCheckDone = true;
+        try {
+            const textBody = await gmFetchText(VERSION_CHECK_URL + '?t=' + Date.now(), 8000);
+            const m = textBody.match(/@version\s+([0-9]+(?:\.[0-9]+)*)/);
+            if (m) remoteVersion = m[1];
+        } catch (e) {
+            console.warn('[AeroDeck] version check failed', e);
+            remoteVersion = null;
+        }
+        if (panelOpen && !minimized && activeTab === 'settings') render();
+    }
+
+    async function fetchNameClaim(nameKey) {
+        if (!MULTIPLAYER_BACKEND_URL || !nameKey) return null;
+        try {
+            const res = await fetch(MULTIPLAYER_BACKEND_URL + '/aerodeck_names/' + encodeURIComponent(nameKey) + '.json');
+            if (!res.ok) return null;
+            return await res.json();
+        } catch (e) { return null; }
+    }
+    async function claimPilotName(name, pilotId) {
+        const nameKey = normalizeNameKey(name);
+        if (!nameKey) return { ok: false, reason: 'invalid' };
+        if (!MULTIPLAYER_BACKEND_URL) return { ok: true, offline: true };
+        const existing = await fetchNameClaim(nameKey);
+        if (existing && existing.pilotId && existing.pilotId !== pilotId) {
+            return { ok: false, reason: 'taken' };
+        }
+        if (existing && existing.pilotId === pilotId) return { ok: true };
+        try {
+            const res = await fetch(MULTIPLAYER_BACKEND_URL + '/aerodeck_names/' + encodeURIComponent(nameKey) + '.json', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pilotId, claimedAt: Date.now(), name: name.trim().slice(0, 40) })
+            });
+            if (!res.ok) {
+                // race: someone else claimed first
+                const again = await fetchNameClaim(nameKey);
+                if (again && again.pilotId && again.pilotId !== pilotId) return { ok: false, reason: 'taken' };
+                return { ok: false, reason: 'network' };
+            }
+            return { ok: true };
+        } catch (e) {
+            return { ok: true, offline: true }; // allow local register if backend down
+        }
+    }
+
     // ------------------------------- theme -------------------------------
+// ------------------------------- theme -------------------------------
     const THEME_CLASSES = ['theme-violet', 'theme-amber', 'theme-emerald', 'theme-rose', 'theme-sky', 'theme-slate', 'theme-coral', 'theme-lime', 'theme-indigo', 'theme-teal', 'theme-magenta', 'theme-gold', 'theme-mint', 'theme-crimson', 'theme-ocean', 'theme-grape', 'theme-forest'];
     function getTheme() { return gmGet(STORAGE.THEME, 'default'); }
     function setTheme(name) {
@@ -1385,8 +1579,10 @@ function applySimbriefToFlight() {
     // ------------------------------- CHARTS tab -------------------------------
     const chartDataCache = {};
     let chartMode = 'origin'; // 'origin' | 'destination' | 'search'
+    const chartViewState = {}; // icao -> { zoom, panX, panY }, remembered across tab switches / minimize
     let chartSearchText = '';
     let chartLoadState = { status: 'idle', icao: null, error: null };
+    let chartsMaximized = false;
     let chartState = null;
 
     async function loadChartData(icao) {
@@ -1402,7 +1598,7 @@ function applySimbriefToFlight() {
     const CHART_FREQ_ORDER = { ATIS: 0, CLD: 1, GND: 2, TWR: 3, APP: 4, DEP: 5, UNICOM: 6 };
     function normalizeFreqMhz(v) { return v > 200 ? Math.round((v / 10) * 1000) / 1000 : v; }
 
-    function buildChartSVG(container, data) {
+    function buildChartSVG(container, data, icao) {
         container.innerHTML = '';
         const NS = 'http://www.w3.org/2000/svg';
         const svg = document.createElementNS(NS, 'svg');
@@ -1473,6 +1669,22 @@ function applySimbriefToFlight() {
         viewport.appendChild(gApron);
 
         const gRwy = el('g', {}), gRwyLabels = el('g', {}), runwayPolys = [];
+        // Shared collision registry: every label placed anywhere on the chart reserves
+        // its box here, and every later label (taxi, then gate) is skipped if it would
+        // land on top of something already placed. Runways go first (highest priority,
+        // rarely crowded), then named taxiways, then LINK segments, then gate numbers —
+        // so the numerous small gate labels are the ones that yield space, not the
+        // taxiway names pilots actually need to read.
+        const placedLabelRects = [];
+        function estLabelWidth(text, fontSize) { return String(text).length * fontSize * 0.62 + 2; }
+        function labelRect(cx, cy, text, fontSize) {
+            const w = estLabelWidth(text, fontSize), h = fontSize * 1.25;
+            return { x1: cx - w / 2, y1: cy - h / 2, x2: cx + w / 2, y2: cy + h / 2 };
+        }
+        function rectFree(rect, pad) {
+            const p = pad == null ? 1.5 : pad;
+            return !placedLabelRects.some((r) => !(rect.x2 + p < r.x1 || rect.x1 - p > r.x2 || rect.y2 + p < r.y1 || rect.y1 - p > r.y2));
+        }
         data.runways.forEach((r) => {
             const [x1, y1] = px(r.ends[0].lat, r.ends[0].lon), [x2, y2] = px(r.ends[1].lat, r.ends[1].lon);
             const wPx = Math.max(r.width_m * scale, 5);
@@ -1484,10 +1696,12 @@ function applySimbriefToFlight() {
             const angle = Math.atan2(dy, dx) * 180 / Math.PI;
             const rot = angle > 90 || angle < -90 ? angle + 180 : angle;
             const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+            const centerText = r.ends[0].id + ' / ' + r.ends[1].id;
             const centerLabel = el('text', { x: 0, y: 3, class: 'rwy-label', 'text-anchor': 'middle' });
-            centerLabel.textContent = r.ends[0].id + ' / ' + r.ends[1].id;
+            centerLabel.textContent = centerText;
             centerLabel.setAttribute('transform', `translate(${mx},${my}) rotate(${rot})`);
             gRwyLabels.appendChild(centerLabel);
+            placedLabelRects.push(labelRect(mx, my, centerText, 14));
             [[x1, y1, dx, dy, r.ends[0].id], [x2, y2, -dx, -dy, r.ends[1].id]].forEach(([ex, ey, ddx, ddy, id]) => {
                 const inLen = Math.hypot(ddx, ddy);
                 const ix = ex + ddx / inLen * 22, iy = ey + ddy / inLen * 22;
@@ -1495,6 +1709,7 @@ function applySimbriefToFlight() {
                 eLabel.textContent = id;
                 eLabel.setAttribute('transform', `translate(${ix},${iy}) rotate(${rot})`);
                 gRwyLabels.appendChild(eLabel);
+                placedLabelRects.push(labelRect(ix, iy, id, 14));
             });
         });
         viewport.appendChild(gRwy);
@@ -1521,16 +1736,27 @@ function applySimbriefToFlight() {
             }
             return false;
         }
-        const TAXI_LABEL_SPACING = 95;
-        Object.keys(groups).forEach((name) => {
+        const TAXI_LABEL_SPACING = 210;
+        // Named taxiways get first pick of space, LINK segments (Gateway's unnamed
+        // connector ids, not real charted designators) are placed after and yield to them.
+        const groupNames = Object.keys(groups).sort((a, b) => {
+            const la = /^link\d*$/i.test(a) ? 1 : 0, lb = /^link\d*$/i.test(b) ? 1 : 0;
+            return la - lb;
+        });
+        groupNames.forEach((name) => {
             let lastX = null, lastY = null;
+            const isLink = /^link\d*$/i.test((name || '').trim());
+            const fontSize = isLink ? 9 : 11;
             groups[name].forEach((seg) => {
                 const mx = (seg.x1 + seg.x2) / 2, my = (seg.y1 + seg.y2) / 2;
                 if (pointInAnyRunway(mx, my)) return;
                 if (lastX === null || Math.hypot(mx - lastX, my - lastY) >= TAXI_LABEL_SPACING) {
-                    const t = el('text', { x: mx, y: my, class: 'taxi-label', 'text-anchor': 'middle' });
+                    const rect = labelRect(mx, my, name, fontSize);
+                    if (!rectFree(rect)) return;
+                    const t = el('text', { x: mx, y: my, class: isLink ? 'taxi-label taxi-label-link' : 'taxi-label taxi-label-named', 'text-anchor': 'middle' });
                     t.textContent = name;
                     gTaxiLabels.appendChild(t);
+                    placedLabelRects.push(rect);
                     lastX = mx; lastY = my;
                 }
             });
@@ -1540,14 +1766,23 @@ function applySimbriefToFlight() {
 
         const gGates = el('g', {});
         function shortGateLabel(name) { if (!name) return ''; const parts = name.trim().split(/\s+/); return parts[parts.length - 1]; }
-        const GATE_LABEL_SPACING = 11, placedGateLabels = [];
+        const GATE_LABEL_SPACING = 32, GATE_TICK_SPACING = 9, placedGateLabels = [], placedGateTicks = [];
         (data.gates || []).forEach((g) => {
             const [x, y] = px(g.lat, g.lon);
+            const tickTooClose = placedGateTicks.some((p) => Math.hypot(p[0] - x, p[1] - y) < GATE_TICK_SPACING);
+            if (tickTooClose) return;
+            placedGateTicks.push([x, y]);
             const tick = el('line', { x1: x, y1: y - 3, x2: x, y2: y + 3, class: 'gate-tick' });
             tick.appendChild(el('title', {})).textContent = (g.name || 'Gate') + (g.airline_code ? ' · ' + g.airline_code.toUpperCase() : '');
             gGates.appendChild(tick);
-            const tooClose = placedGateLabels.some((p) => Math.hypot(p[0] - x, p[1] - y) < GATE_LABEL_SPACING);
-            if (!tooClose) { const t = el('text', { x: x + 4, y: y + 2.5, class: 'gate-label' }); t.textContent = shortGateLabel(g.name); gGates.appendChild(t); placedGateLabels.push([x, y]); }
+            const gateText = shortGateLabel(g.name);
+            const tooCloseToGate = placedGateLabels.some((p) => Math.hypot(p[0] - x, p[1] - y) < GATE_LABEL_SPACING);
+            const rect = labelRect(x + 4 + estLabelWidth(gateText, 8.5) / 2, y + 2.5, gateText, 8.5);
+            if (!tooCloseToGate && rectFree(rect)) {
+                const t = el('text', { x: x + 4, y: y + 2.5, class: 'gate-label' }); t.textContent = gateText; gGates.appendChild(t);
+                placedGateLabels.push([x, y]);
+                placedLabelRects.push(rect);
+            }
         });
         viewport.appendChild(gGates);
 
@@ -1565,8 +1800,13 @@ function applySimbriefToFlight() {
         });
         const freqRows = Object.keys(freqByType).map((label) => ({ label, mhz: freqByType[label], order: CHART_FREQ_ORDER[(data.frequencies.find((f) => (f.label || f.type) === label) || {}).type] ?? 9 })).sort((a, b) => a.order - b.order);
 
-        let zoom = 1, panX = 0, panY = 0;
-        function applyTransform() { viewport.setAttribute('transform', `translate(${panX},${panY}) scale(${zoom})`); }
+        const savedView = icao ? chartViewState[icao] : null;
+        let zoom = savedView ? savedView.zoom : 1, panX = savedView ? savedView.panX : 0, panY = savedView ? savedView.panY : 0;
+        function applyTransform() {
+            viewport.setAttribute('transform', `translate(${panX},${panY}) scale(${zoom})`);
+            if (icao) chartViewState[icao] = { zoom, panX, panY };
+        }
+        applyTransform(); // apply the restored view immediately, don't wait for the first zoom/pan action
         function onWheel(e) { e.preventDefault(); e.stopPropagation(); const factor = e.deltaY > 0 ? 0.9 : 1.1; zoom = Math.min(6, Math.max(0.5, zoom * factor)); applyTransform(); }
         let dragging = false, lastX = 0, lastY = 0;
         function onDown(e) { dragging = true; lastX = e.clientX; lastY = e.clientY; }
@@ -1592,6 +1832,9 @@ function applySimbriefToFlight() {
             <div><span class="chart-sw" style="background:#213a56"></span>Apron / ramp</div>
             <div><span class="chart-sw" style="background:#2e4a6c"></span>Terminal ramp</div>
             <div><span class="chart-sw" style="background:#0a1420;border:1px solid #dfe6ee"></span>Runway</div>
+            <div><span class="chart-sw" style="background:#6ee7b7"></span>Taxiway</div>
+            <div><span class="chart-sw" style="background:#6b8bb0"></span>Link segment</div>
+            <div><span class="chart-sw" style="background:#e9b8f2"></span>Gate / stand</div>
             <div><span class="chart-sw" style="background:#f6c343"></span>You</div>
             <div><span class="chart-sw" style="background:#3b82f6"></span>Other pilots</div>`;
         const freqHtml = freqRows.length ? `<div class="chart-legend-freqs">${freqRows.map((r) => `<div><span class="chart-freq-label">${escapeHtml(r.label)}</span><span class="chart-freq-val">${r.mhz.toFixed(3)}</span></div>`).join('')}</div>` : '';
@@ -1642,6 +1885,7 @@ function applySimbriefToFlight() {
                 <button class="aerodeck-mode-btn ${chartMode === 'origin' ? 'active' : ''}" data-mode="origin">ORIGIN${flight.origin ? ' · ' + flight.origin.icao : ''}</button>
                 <button class="aerodeck-mode-btn ${chartMode === 'destination' ? 'active' : ''}" data-mode="destination">DEST${flight.destination ? ' · ' + flight.destination.icao : ''}</button>
                 <button class="aerodeck-mode-btn ${chartMode === 'search' ? 'active' : ''}" data-mode="search">SEARCH</button>
+                <button id="aerodeck-chart-maximize-btn" class="aerodeck-icon-btn aerodeck-chart-maximize-btn" title="${chartsMaximized ? 'Restore' : 'Maximize chart'}">${chartsMaximized ? ICON_MINIMIZE : ICON_CHARTS}</button>
             </div>
             <div id="aerodeck-chart-search-row" style="display:${chartMode === 'search' ? 'flex' : 'none'};gap:8px;margin-bottom:10px;">
                 <input id="aerodeck-chart-icao-input" class="aerodeck-input" style="max-width:140px;" type="text" placeholder="ICAO e.g. KJFK" maxlength="4" value="${escapeHtml(chartSearchText)}">
@@ -1657,6 +1901,14 @@ function applySimbriefToFlight() {
         container.querySelectorAll('.aerodeck-mode-btn').forEach((btn) => {
             btn.onclick = () => { chartMode = btn.getAttribute('data-mode'); render(); };
         });
+        const maximizeBtn = container.querySelector('#aerodeck-chart-maximize-btn');
+        if (maximizeBtn) maximizeBtn.onclick = () => {
+            chartsMaximized = !chartsMaximized;
+            if (tabletEl) tabletEl.classList.toggle('charts-maximized', chartsMaximized);
+            render();
+            setTimeout(() => { if (chartState) updateChartAircraft(); }, 60);
+        };
+        if (tabletEl) tabletEl.classList.toggle('charts-maximized', chartsMaximized && activeTab === 'charts');
         const statusEl = container.querySelector('#aerodeck-chart-status');
         function renderStatus() {
             if (chartLoadState.status === 'loading') { statusEl.style.display = 'block'; statusEl.innerHTML = `Loading diagram for ${escapeHtml(chartLoadState.icao)}…`; }
@@ -1677,7 +1929,7 @@ function applySimbriefToFlight() {
                 const canvas = container.querySelector('#aerodeck-chart-canvas');
                 const legendEl = container.querySelector('#aerodeck-chart-legend');
                 if (!canvas) return;
-                const built = buildChartSVG(canvas, data);
+                const built = buildChartSVG(canvas, data, icao);
                 chartState = built;
                 renderChartLegend(legendEl, built.freqRows);
                 updateChartAircraft();
@@ -1719,6 +1971,7 @@ function applySimbriefToFlight() {
     const ICON_HISTORY = `<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3.5 3.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
     const ICON_PLUS = `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>`;
     const ICON_MINIMIZE = `<svg viewBox="0 0 24 24" width="14" height="14"><path d="M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>`;
+    const ICON_SEARCH = `<svg viewBox="0 0 24 24" width="13" height="13"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M20 20l-4.5-4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>`;
     const ICON_SIGNAL = (ok) => `<svg viewBox="0 0 20 14" width="16" height="12"><rect x="0" y="9" width="3" height="5" rx="1" fill="${ok ? '#5eead4' : '#3d5675'}"/><rect x="5" y="6" width="3" height="8" rx="1" fill="${ok ? '#5eead4' : '#3d5675'}"/><rect x="10" y="3" width="3" height="11" rx="1" fill="${ok !== false ? '#5eead4' : '#3d5675'}"/><rect x="15" y="0" width="3" height="14" rx="1" fill="${ok === true ? '#5eead4' : '#3d5675'}"/></svg>`;
     const ICON_BATTERY = (pct) => {
         const p = Math.max(5, Math.min(100, pct == null ? 100 : pct));
@@ -1773,9 +2026,14 @@ function applySimbriefToFlight() {
             #aerodeck-tablet.is-mini #aerodeck-resize-handle { display: block; }
             #aerodeck-tablet.is-mini #aerodeck-topbar { padding: 6px 10px; cursor: grab; }
             #aerodeck-mini-body { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
-            .aerodeck-mini-toolbar { display: flex; gap: 4px; padding: 4px 6px; flex-shrink: 0; }
+            .aerodeck-mini-toolbar { display: flex; gap: 4px; padding: 4px 6px; flex-shrink: 0; align-items: center; }
             .aerodeck-mini-btn { flex: 1; padding: 5px 0; font-size: 9px; font-weight: 800; letter-spacing: 0.5px; border-radius: 6px; border: 1px solid #1e3552; background: #0e2138; color: #6f85a0; cursor: pointer; }
             .aerodeck-mini-btn.active { background: linear-gradient(180deg,var(--ad-accent2),var(--ad-accent)); color: #052024; border-color: transparent; }
+            .aerodeck-mini-icon-btn { flex-shrink: 0; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px solid #1e3552; background: #0e2138; color: #6f85a0; cursor: pointer; padding: 0; }
+            .aerodeck-mini-icon-btn:hover { color: var(--ad-accent); border-color: var(--ad-accent-glow); }
+            .aerodeck-mini-search-row { display: flex; gap: 4px; padding: 0 6px 4px; flex-shrink: 0; }
+            .aerodeck-mini-search-row .aerodeck-input { padding: 5px 7px; font-size: 11px; letter-spacing: 0.5px; }
+            .aerodeck-mini-search-row .aerodeck-btn { margin-top: 0; width: auto; padding: 5px 10px; font-size: 10px; flex-shrink: 0; }
             #aerodeck-mini-canvas { flex: 1; min-height: 0; height: auto !important; border-radius: 8px; overflow: hidden; margin: 0 6px 6px; border: 1px solid #1e3552; background: #0a1729; position: relative; }
             #aerodeck-mini-canvas .leaflet-container { width: 100% !important; height: 100% !important; }
             #aerodeck-mini-nav { flex: 1; min-height: 0; overflow: auto; padding: 6px 8px; font-size: 10px; }
@@ -1810,8 +2068,14 @@ function applySimbriefToFlight() {
             .aerodeck-link.danger { color: #e0955c; }
             .aerodeck-sidebar-links { margin-top: 4px; display: flex; flex-direction: column; gap: 5px; }
             .aerodeck-confirm-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 10px; color: #8397ae; margin-top: 3px; }
-            #aerodeck-content { flex: 1; min-width: 0; overflow-y: auto; padding: 16px 18px 24px; display: flex; flex-direction: column; }
+            #aerodeck-content { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 16px 18px 24px; display: flex; flex-direction: column; }
             #aerodeck-content.tab-fill { overflow: hidden; padding-bottom: 12px; }
+            #aerodeck-tablet.charts-maximized #aerodeck-sidebar { display: none; }
+            #aerodeck-tablet.charts-maximized #aerodeck-topbar { padding: 5px 10px; }
+            #aerodeck-tablet.charts-maximized #aerodeck-content.tab-fill { padding: 6px; }
+            #aerodeck-tablet.charts-maximized .aerodeck-chart-wrap,
+            #aerodeck-tablet.charts-maximized #aerodeck-chart-stage { border-radius: 6px; }
+            .aerodeck-chart-maximize-btn { margin-left: auto; }
             #aerodeck-content.tab-fill > .aerodeck-chat-panel,
             #aerodeck-content.tab-fill > .aerodeck-chart-wrap,
             #aerodeck-content.tab-fill > .aerodeck-map-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -1893,12 +2157,14 @@ function applySimbriefToFlight() {
             #aerodeck-chart-canvas .apron, #aerodeck-mini-canvas .apron { fill: #213a56; stroke: none; }
             #aerodeck-chart-canvas .apron.terminal, #aerodeck-mini-canvas .apron.terminal { fill: #2e4a6c; }
             #aerodeck-chart-canvas .terminal-label, #aerodeck-mini-canvas .terminal-label { fill: #cfe0ee; font-size: 11px; font-weight: 800; letter-spacing: 1px; }
-            #aerodeck-chart-canvas .runway, #aerodeck-mini-canvas .runway { fill: #0a1420; stroke: #dfe6ee; stroke-width: 1; }
-            #aerodeck-chart-canvas .rwy-label, #aerodeck-mini-canvas .rwy-label { fill: #f6f8fa; font-size: 12px; font-weight: 800; }
-            #aerodeck-chart-canvas .taxi-line, #aerodeck-mini-canvas .taxi-line { stroke: #f6c343; stroke-width: 1.4; opacity: 0.85; }
-            #aerodeck-chart-canvas .taxi-label, #aerodeck-mini-canvas .taxi-label { fill: #7fd4ff; font-size: 9px; font-weight: 700; }
-            #aerodeck-chart-canvas .gate-tick, #aerodeck-mini-canvas .gate-tick { stroke: #7fa8d9; stroke-width: 1.4; }
-            #aerodeck-chart-canvas .gate-label, #aerodeck-mini-canvas .gate-label { fill: #9fc1e8; font-size: 7.5px; }
+            #aerodeck-chart-canvas .runway, #aerodeck-mini-canvas .runway { fill: #0a1420; stroke: #f2f6fa; stroke-width: 1.6; }
+            #aerodeck-chart-canvas .rwy-label, #aerodeck-mini-canvas .rwy-label { fill: #f6f8fa; font-size: 14px; font-weight: 800; }
+            #aerodeck-chart-canvas .taxi-line, #aerodeck-mini-canvas .taxi-line { stroke: #f6c343; stroke-width: 2; opacity: 0.92; }
+            #aerodeck-chart-canvas .taxi-label, #aerodeck-mini-canvas .taxi-label { font-weight: 800; }
+            #aerodeck-chart-canvas .taxi-label-named, #aerodeck-mini-canvas .taxi-label-named { fill: #6ee7b7; font-size: 11px; }
+            #aerodeck-chart-canvas .taxi-label-link, #aerodeck-mini-canvas .taxi-label-link { fill: #6b8bb0; font-size: 9px; font-weight: 700; }
+            #aerodeck-chart-canvas .gate-tick, #aerodeck-mini-canvas .gate-tick { stroke: #e39bef; stroke-width: 1.8; }
+            #aerodeck-chart-canvas .gate-label, #aerodeck-mini-canvas .gate-label { fill: #e9b8f2; font-size: 8.5px; font-weight: 600; }
             #aerodeck-chart-canvas .aircraft, #aerodeck-mini-canvas .aircraft { fill: #f6c343; stroke: #052024; stroke-width: 0.6; }
             #aerodeck-chart-canvas .other-aircraft, #aerodeck-mini-canvas .other-aircraft { fill: #3b82f6; stroke: #052024; stroke-width: 0.6; opacity: 0.92; }
             .aerodeck-chart-legend { position: absolute; left: 10px; top: 10px; background: rgba(5,10,18,0.82); border: 1px solid #1e3552; border-radius: 8px; padding: 9px 11px; font-size: 10px; color: #cfe0ee; display: flex; flex-direction: column; gap: 4px; max-width: 140px; }
@@ -2040,9 +2306,40 @@ function applySimbriefToFlight() {
                 <input id="aerodeck-reg-id" class="aerodeck-input" type="text" value="${pilotId}" disabled>
                 <button id="aerodeck-reg-save" class="aerodeck-btn">REGISTER &amp; CONTINUE</button>
             </div>`;
-        content.querySelector('#aerodeck-reg-save').onclick = () => {
-            const name = content.querySelector('#aerodeck-reg-name').value.trim();
-            if (!name) { content.querySelector('#aerodeck-reg-name').style.borderColor = '#c0392b'; return; }
+        content.querySelector('#aerodeck-reg-save').onclick = async () => {
+            const nameInput = content.querySelector('#aerodeck-reg-name');
+            const btn = content.querySelector('#aerodeck-reg-save');
+            const name = nameInput.value.trim();
+            if (!name) { nameInput.style.borderColor = '#c0392b'; return; }
+            nameInput.style.borderColor = '';
+            const prevWarn = content.querySelector('#aerodeck-reg-warn');
+            if (prevWarn) prevWarn.remove();
+            btn.disabled = true;
+            btn.textContent = 'CHECKING…';
+            const claim = await claimPilotName(name, pilotId);
+            if (!claim.ok && claim.reason === 'taken') {
+                btn.disabled = false;
+                btn.textContent = 'REGISTER & CONTINUE';
+                const warn = document.createElement('div');
+                warn.id = 'aerodeck-reg-warn';
+                warn.className = 'aerodeck-warn';
+                warn.style.marginTop = '8px';
+                warn.textContent = 'That username is already registered. Choose another name.';
+                btn.insertAdjacentElement('beforebegin', warn);
+                nameInput.style.borderColor = '#c0392b';
+                return;
+            }
+            if (!claim.ok && claim.reason === 'network') {
+                btn.disabled = false;
+                btn.textContent = 'REGISTER & CONTINUE';
+                const warn = document.createElement('div');
+                warn.id = 'aerodeck-reg-warn';
+                warn.className = 'aerodeck-warn';
+                warn.style.marginTop = '8px';
+                warn.textContent = 'Could not verify username (network). Try again.';
+                btn.insertAdjacentElement('beforebegin', warn);
+                return;
+            }
             saveProfile({ name, id: pilotId, registeredAt: Date.now() });
             checklistState = getChecklistState(pilotId);
             render();
@@ -2335,7 +2632,18 @@ function applySimbriefToFlight() {
     function renderSettingsTab(container, profile) {
         const b = computeBadge(profile.id);
         const theme = getTheme();
+        const updateBanner = isUpdateAvailable()
+            ? `<div class="aerodeck-card" style="margin-bottom:10px;border-color:var(--accent,#22d3ee);">
+                    <div class="aerodeck-airline-name" style="font-size:12px;">Update available — v${escapeHtml(remoteVersion)}</div>
+                    <div class="aerodeck-airline-meta">You are on v${escapeHtml(SCRIPT_VERSION)}</div>
+                    <a id="aerodeck-update-link" class="aerodeck-btn secondary" style="display:inline-block;margin-top:8px;text-align:center;text-decoration:none;"
+                       href="${RELEASES_URL}" target="_blank" rel="noopener">Open update page</a>
+               </div>`
+            : (remoteVersion
+                ? `<div class="aerodeck-airline-meta" style="margin-bottom:10px;">Up to date · v${escapeHtml(SCRIPT_VERSION)}</div>`
+                : `<div class="aerodeck-airline-meta" style="margin-bottom:10px;">AeroDeck v${escapeHtml(SCRIPT_VERSION)}</div>`);
         container.innerHTML = `
+            ${updateBanner}
             <div class="aerodeck-label">Profile</div>
             <div class="aerodeck-card">
                 <div class="aerodeck-profile-card">
@@ -2740,6 +3048,7 @@ function renderSidebar(sidebarEl) {
         content.scrollTop = prevScrollTop;
         if (activeTab === 'chat' || activeTab === 'map' || activeTab === 'charts') content.classList.add('tab-fill');
         else content.classList.remove('tab-fill');
+        if (activeTab !== 'charts' && tabletEl) tabletEl.classList.remove('charts-maximized');
 
         const cClose = content.querySelector('#aerodeck-countries-close'); if (cClose) cClose.onclick = () => { showCountriesModal = false; render(); };
         const cCloseBtn = content.querySelector('#aerodeck-countries-close-btn'); if (cCloseBtn) cCloseBtn.onclick = () => { showCountriesModal = false; render(); };
@@ -2807,12 +3116,36 @@ function renderSidebar(sidebarEl) {
                     <button class="aerodeck-mini-btn ${miniView === 'map' ? 'active' : ''}" id="aerodeck-mini-map-btn">MAP</button>
                     <button class="aerodeck-mini-btn ${miniView === 'charts' ? 'active' : ''}" id="aerodeck-mini-charts-btn">CHARTS</button>
                     <button class="aerodeck-mini-btn ${miniView === 'nav' ? 'active' : ''}" id="aerodeck-mini-nav-btn">NAV</button>
+                    ${miniView === 'charts' ? `<button class="aerodeck-mini-icon-btn" id="aerodeck-mini-chart-search-btn" title="Search airport">${ICON_SEARCH}</button>` : ''}
                 </div>
+                ${miniView === 'charts' && miniChartSearchOpen ? `
+                <div class="aerodeck-mini-search-row">
+                    <input id="aerodeck-mini-chart-icao-input" class="aerodeck-input" type="text" placeholder="ICAO" maxlength="4" value="${escapeHtml(miniChartIcaoText)}">
+                    <button id="aerodeck-mini-chart-load-btn" class="aerodeck-btn secondary">GO</button>
+                </div>` : ''}
                 ${miniView === 'nav' ? '<div id="aerodeck-mini-nav"></div>' : '<div id="aerodeck-mini-canvas"></div>'}
             </div>`;
-        main.querySelector('#aerodeck-mini-map-btn').onclick = () => { if (miniView !== 'map') { destroyMiniMap(); miniView = 'map'; renderMinimized(); } };
+        main.querySelector('#aerodeck-mini-map-btn').onclick = () => { if (miniView !== 'map') { destroyMiniMap(); miniView = 'map'; miniChartSearchOpen = false; renderMinimized(); } };
         main.querySelector('#aerodeck-mini-charts-btn').onclick = () => { if (miniView !== 'charts') { destroyMiniMap(); miniView = 'charts'; chartState = null; renderMinimized(); } };
-        main.querySelector('#aerodeck-mini-nav-btn').onclick = () => { if (miniView !== 'nav') { destroyMiniMap(); miniView = 'nav'; renderMinimized(); } };
+        main.querySelector('#aerodeck-mini-nav-btn').onclick = () => { if (miniView !== 'nav') { destroyMiniMap(); miniView = 'nav'; miniChartSearchOpen = false; renderMinimized(); } };
+        const miniSearchBtn = main.querySelector('#aerodeck-mini-chart-search-btn');
+        if (miniSearchBtn) miniSearchBtn.onclick = () => { miniChartSearchOpen = !miniChartSearchOpen; renderMinimized(); };
+        const miniIcaoInput = main.querySelector('#aerodeck-mini-chart-icao-input');
+        const miniLoadBtn = main.querySelector('#aerodeck-mini-chart-load-btn');
+        if (miniIcaoInput && miniLoadBtn) {
+            miniIcaoInput.oninput = (e) => { miniChartIcaoText = e.target.value.toUpperCase(); };
+            const doMiniLoad = () => {
+                const v = (miniChartIcaoText || '').trim().toUpperCase();
+                if (!/^[A-Z]{4}$/.test(v)) return;
+                miniChartIcaoOverride = v;
+                miniChartSearchOpen = false;
+                chartState = null;
+                renderMinimized();
+            };
+            miniLoadBtn.onclick = doMiniLoad;
+            miniIcaoInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); doMiniLoad(); } };
+            miniIcaoInput.focus();
+        }
 
         if (miniView === 'nav') {
             const navEl = main.querySelector('#aerodeck-mini-nav');
@@ -2870,9 +3203,9 @@ function renderSidebar(sidebarEl) {
             });
         } else if (miniView === 'charts') {
             const canvas = main.querySelector('#aerodeck-mini-canvas');
-            const icao = (flight.origin && flight.origin.icao) || (flight.destination && flight.destination.icao);
+            const icao = miniChartIcaoOverride || (flight.origin && flight.origin.icao) || (flight.destination && flight.destination.icao);
             if (!icao) {
-                canvas.innerHTML = `<div class="aerodeck-card muted" style="margin:8px;">Set a route for charts</div>`;
+                canvas.innerHTML = `<div class="aerodeck-card muted" style="margin:8px;">Set a route, or use the search icon above, to load a chart</div>`;
                 return;
             }
             loadChartData(icao).then((data) => {
@@ -2882,10 +3215,11 @@ function renderSidebar(sidebarEl) {
                 const body = main.querySelector('#aerodeck-mini-body');
                 if (body) {
                     const tb = body.querySelector('.aerodeck-mini-toolbar');
-                    const h = Math.max(80, body.clientHeight - (tb ? tb.offsetHeight : 28) - 12);
+                    const sr = body.querySelector('.aerodeck-mini-search-row');
+                    const h = Math.max(80, body.clientHeight - (tb ? tb.offsetHeight : 28) - (sr ? sr.offsetHeight : 0) - 12);
                     freshCanvas.style.height = h + 'px';
                 }
-                const built = buildChartSVG(freshCanvas, data);
+                const built = buildChartSVG(freshCanvas, data, icao);
                 chartState = built;
                 updateChartAircraft();
                 refreshPresenceIfStale();
@@ -2894,6 +3228,9 @@ function renderSidebar(sidebarEl) {
     }
 
     let miniView = 'map';
+    let miniChartSearchOpen = false;
+    let miniChartIcaoText = '';
+    let miniChartIcaoOverride = null;
 
     // ------------------------------- open / close / minimize -------------------------------
     let dataLoadStarted = false;
@@ -2903,6 +3240,7 @@ function renderSidebar(sidebarEl) {
         if (panelOpen) return;
         panelOpen = true; minimized = false;
         injectStyles(); ensureDataLoaded();
+        checkForUpdate();
         dragAbort = new AbortController();
         backdropEl = document.createElement('div'); backdropEl.id = 'aerodeck-backdrop'; backdropEl.onclick = closePanel;
         document.body.appendChild(backdropEl);
