@@ -2,8 +2,8 @@
 // @name         AeroDeck EFB
 // @namespace    http://tampermonkey.net/
 // @version      1.0.1
-// @updateURL    https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.js
-// @downloadURL  https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.js
+// @updateURL    https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.user.js
+// @downloadURL  https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.user.js
 // @description  Airline operations EFB for GeoFS.
 // @author       machpoint82
 // @match        *://www.geo-fs.com/*
