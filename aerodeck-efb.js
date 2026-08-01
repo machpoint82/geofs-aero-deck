@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AeroDeck EFB
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      1.0.1
 // @updateURL    https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.js
 // @downloadURL  https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.js
 // @description  Airline operations EFB for GeoFS.
@@ -52,7 +52,8 @@
         GEOMETRY: 'aerodeck_geometry_v2',
         CHAT_AGE_ACK: 'aerodeck_chat_age_ack',
         THEME: 'aerodeck_theme',
-        SIMBRIEF_USERNAME: 'aerodeck_simbrief_username'
+        SIMBRIEF_USERNAME: 'aerodeck_simbrief_username',
+        OPEN_SHORTCUT: 'aerodeck_open_shortcut'
     };
 
     const CHARTS_BASE_URL = 'https://cdn.jsdelivr.net/gh/machpoint82/geofs-aero-deck@main/charts';
@@ -64,7 +65,7 @@
     const METAR_CACHE_MS = 10 * 60 * 1000;
 
     // Keep in sync with // @version above
-    const SCRIPT_VERSION = '1.0.0';
+    const SCRIPT_VERSION = '1.0.1';
     const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.js';
     const RELEASES_URL = 'https://github.com/machpoint82/geofs-aero-deck/releases/latest';
     let remoteVersion = null;
@@ -215,6 +216,78 @@
         gmSet(STORAGE.AIRLINES_CACHE, null);
         gmSet(STORAGE.AIRPORTS_CACHE, null);
         initData();
+    }
+
+    // ------------------------------- open-EFB keyboard shortcut -------------------------------
+    // Stored as { ctrl, alt, shift, meta, key } or null when disabled.
+    // key is a KeyboardEvent.key string (e.g. ' ', 'e', 'F1').
+    function getOpenShortcut() {
+        const v = gmGet(STORAGE.OPEN_SHORTCUT, null);
+        if (!v || typeof v !== 'object' || !v.key) return null;
+        return {
+            ctrl: !!v.ctrl,
+            alt: !!v.alt,
+            shift: !!v.shift,
+            meta: !!v.meta,
+            key: String(v.key)
+        };
+    }
+    function setOpenShortcut(spec) {
+        if (!spec || !spec.key) gmSet(STORAGE.OPEN_SHORTCUT, null);
+        else gmSet(STORAGE.OPEN_SHORTCUT, {
+            ctrl: !!spec.ctrl, alt: !!spec.alt, shift: !!spec.shift, meta: !!spec.meta, key: String(spec.key)
+        });
+    }
+    function formatShortcut(spec) {
+        if (!spec || !spec.key) return 'None';
+        const parts = [];
+        if (spec.ctrl) parts.push('Ctrl');
+        if (spec.alt) parts.push('Alt');
+        if (spec.shift) parts.push('Shift');
+        if (spec.meta) parts.push('Meta');
+        let k = spec.key;
+        if (k === ' ') k = 'Space';
+        else if (k.length === 1) k = k.toUpperCase();
+        parts.push(k);
+        return parts.join(' + ');
+    }
+    function eventMatchesShortcut(e, spec) {
+        if (!spec || !spec.key) return false;
+        if (!!e.ctrlKey !== !!spec.ctrl) return false;
+        if (!!e.altKey !== !!spec.alt) return false;
+        if (!!e.shiftKey !== !!spec.shift) return false;
+        if (!!e.metaKey !== !!spec.meta) return false;
+        // Space is reported as ' ' ; compare case-insensitively for letters
+        const ek = e.key;
+        const sk = spec.key;
+        if (sk === ' ' || sk === 'Space') return ek === ' ';
+        if (sk.length === 1 && ek.length === 1) return ek.toLowerCase() === sk.toLowerCase();
+        return ek === sk;
+    }
+    function isTypingTarget(el) {
+        if (!el) return false;
+        const tag = (el.tagName || '').toUpperCase();
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+        if (el.isContentEditable) return true;
+        return false;
+    }
+    let shortcutCaptureMode = false;
+    function onGlobalShortcutKeydown(e) {
+        if (shortcutCaptureMode) return; // handled by settings capture UI
+        if (isTypingTarget(document.activeElement)) return;
+        // Don't steal keys while the tablet has focus on an input (stopPropagation already helps)
+        const spec = getOpenShortcut();
+        if (!eventMatchesShortcut(e, spec)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (!panelOpen) openPanel();
+        else if (minimized) restore();
+        else closePanel(); // toggle closed when fully open
+    }
+    function installOpenShortcutListener() {
+        if (installOpenShortcutListener._done) return;
+        installOpenShortcutListener._done = true;
+        document.addEventListener('keydown', onGlobalShortcutKeydown, true);
     }
 
     // ------------------------------- lookups -------------------------------
@@ -2680,6 +2753,17 @@ function applySimbriefToFlight() {
                 <button class="aerodeck-mode-btn ${theme === 'grape' ? 'active' : ''}" data-theme="grape">GRAPE</button>
                 <button class="aerodeck-mode-btn ${theme === 'forest' ? 'active' : ''}" data-theme="forest">FOREST</button>
             </div>
+            <div class="aerodeck-label">Keyboard shortcut</div>
+            <div class="aerodeck-card" style="margin-bottom:10px;">
+                <div class="aerodeck-airline-meta" style="margin-bottom:8px;">Optional hotkey to open / restore / close the EFB tablet. Ignored while typing in a field.</div>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <button type="button" id="aerodeck-shortcut-capture" class="aerodeck-btn secondary" style="margin:0;width:auto;padding:8px 14px;">
+                        ${shortcutCaptureMode ? 'Press keys…' : escapeHtml(formatShortcut(getOpenShortcut()))}
+                    </button>
+                    <span class="aerodeck-link" id="aerodeck-shortcut-clear">clear</span>
+                </div>
+                <div class="aerodeck-airline-meta" style="margin-top:8px;">Click the button, then press a combo (e.g. Ctrl+Space). Esc cancels.</div>
+            </div>
             <div class="aerodeck-label">Data</div>
             <div class="aerodeck-sidebar-links" style="margin-top:0;">
                 ${confirmingResetProfile
@@ -2694,6 +2778,36 @@ function applySimbriefToFlight() {
         const resetYes = container.querySelector('#aerodeck-reset-yes'); if (resetYes) resetYes.onclick = () => { clearProfile(); confirmingResetProfile = false; flight = blankFlight(); render(); };
         const resetNo = container.querySelector('#aerodeck-reset-no'); if (resetNo) resetNo.onclick = () => { confirmingResetProfile = false; render(); };
         const refreshLink = container.querySelector('#aerodeck-refresh-data'); if (refreshLink) refreshLink.onclick = () => { if (!confirm('Refresh airline/airport data from the network? Cached data will be replaced.')) return; forceRefreshData(); render(); };
+
+        const capBtn = container.querySelector('#aerodeck-shortcut-capture');
+        const clearLink = container.querySelector('#aerodeck-shortcut-clear');
+        if (clearLink) clearLink.onclick = () => { setOpenShortcut(null); shortcutCaptureMode = false; render(); };
+        if (capBtn) {
+            capBtn.onclick = () => {
+                if (shortcutCaptureMode) return;
+                shortcutCaptureMode = true;
+                render();
+                const onCapture = (e) => {
+                    // pure modifiers alone are not a complete shortcut
+                    if (e.key === 'Escape') {
+                        e.preventDefault(); e.stopPropagation();
+                        document.removeEventListener('keydown', onCapture, true);
+                        shortcutCaptureMode = false;
+                        render();
+                        return;
+                    }
+                    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
+                    e.preventDefault(); e.stopPropagation();
+                    document.removeEventListener('keydown', onCapture, true);
+                    setOpenShortcut({
+                        ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey, key: e.key
+                    });
+                    shortcutCaptureMode = false;
+                    render();
+                };
+                document.addEventListener('keydown', onCapture, true);
+            };
+        }
     }
 
     // ------------------------------- AIRCRAFT tab -------------------------------
@@ -3396,6 +3510,7 @@ function renderSidebar(sidebarEl) {
         tryInsert();
     }
     function ready(fn) { if (document.readyState !== 'loading') fn(); else document.addEventListener('DOMContentLoaded', fn); }
-    ready(() => addToolbarButton());
+    ready(() => { addToolbarButton(); installOpenShortcutListener(); });
     setTimeout(addToolbarButton, 3000);
+    setTimeout(installOpenShortcutListener, 500);
 })();
