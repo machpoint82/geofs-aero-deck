@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AeroDeck EFB
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
+// @version      1.0.2
 // @updateURL    https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.user.js
 // @downloadURL  https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.user.js
 // @description  Airline operations EFB for GeoFS.
@@ -65,11 +65,13 @@
     const METAR_CACHE_MS = 10 * 60 * 1000;
 
     // Keep in sync with // @version above
-    const SCRIPT_VERSION = '1.0.1';
+    const SCRIPT_VERSION = '1.0.2';
     const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.js';
     const RELEASES_URL = 'https://github.com/machpoint82/geofs-aero-deck/releases/latest';
     let remoteVersion = null;
     let versionCheckDone = false;
+    let lastUiInteractTs = 0;
+    function markUiInteract() { lastUiInteractTs = Date.now(); }
 
     // ------------------------------- storage helpers -------------------------------
     function gmGet(key, fallback) {
@@ -356,7 +358,9 @@
     }
     function getFlightPhase() { return FLIGHT_PHASES[getFlightPhaseCode()]; }
     function getOnGround() { try { return geofs.aircraft.instance.groundContact === true; } catch (e) { return false; } }
-    function getParkingBrakeSet() { try { return geofs.aircraft.instance.brakesOn === true; } catch (e) { return false; } }
+   function getParkingBrakeSet() {
+    try { return geofs.aircraft.instance.animationValue.parkingBrake === true; } catch (e) { return false; }
+}
     function getEnginesOff() {
         try {
             const engines = geofs.aircraft.instance.engines;
@@ -2159,6 +2163,15 @@ function applySimbriefToFlight() {
             .aerodeck-label:first-child { margin-top: 0; }
             .aerodeck-input { width: 100%; box-sizing: border-box; background: #081527; border: 1px solid #223956; color: #eef2f7; padding: 9px 11px; border-radius: 7px; font-size: 14px; font-family: 'Consolas', monospace; letter-spacing: 1px; outline: none; }
             .aerodeck-input:focus { border-color: var(--ad-accent); box-shadow: 0 0 0 3px var(--ad-accent-glow); }
+            /* Touch / click responsiveness */
+            #aerodeck-tablet, #aerodeck-tablet * { -webkit-tap-highlight-color: transparent; }
+            .aerodeck-btn, .aerodeck-btn.secondary, .aerodeck-btn.danger,
+            .aerodeck-nav-item, .aerodeck-icon-btn, .aerodeck-mini-btn, .aerodeck-mini-icon-btn,
+            .aerodeck-door, .aerodeck-cl-item, .aerodeck-theme-swatch, .aerodeck-map-toggle,
+            .aerodeck-card.clickable, button {
+                touch-action: manipulation;
+                cursor: pointer;
+            }
             .aerodeck-btn { background: linear-gradient(180deg, var(--ad-accent2) 0%, var(--ad-accent) 100%); color: #052024; border: none; padding: 11px 13px; border-radius: 8px; font-weight: 800; letter-spacing: 0.5px; cursor: pointer; font-size: 12.5px; margin-top: 14px; width: 100%; }
             .aerodeck-btn:disabled { background: #223956; color: #5c7089; cursor: not-allowed; }
             .aerodeck-btn.secondary { background: transparent; border: 1px solid #223956; color: #8397ae; }
@@ -2490,17 +2503,6 @@ function applySimbriefToFlight() {
             if (startBtn) startBtn.onclick = () => {
                 if (!startReady) return;
                 ensureAircraftDetected(true);
-                const sbType = (flight.simbrief && flight.simbrief.aircraftType) || (simbrief.weights && simbrief.weights.aircraftType);
-                const detName = flight.aircraft ? (flight.aircraft.name || '') : '';
-                if (sbType && detName) {
-                    const sb = sbType.toUpperCase().replace(/[^A-Z0-9]/g, '');
-                    const dn = detName.toUpperCase().replace(/[^A-Z0-9]/g, '');
-                    const match = dn.includes(sb) || sb.includes(dn.slice(0, 4));
-                    if (!match) {
-                        const go = confirm(`Aircraft mismatch:\nSimBrief OFP: ${sbType}\nCurrently flying: ${detName}\n\nContinue anyway?\n(Cancel = stay here and change aircraft)`);
-                        if (!go) return;
-                    }
-                }
                 flight.active = true;
                 flight.startTimestamp = Date.now();
                 render();
@@ -3388,6 +3390,8 @@ function renderSidebar(sidebarEl) {
         }
         if (geom && geom.miniSizeIndex != null) miniSizeIndex = geom.miniSizeIndex;
 
+        tabletEl.addEventListener('pointerdown', markUiInteract, true);
+        tabletEl.addEventListener('touchstart', markUiInteract, { capture: true, passive: true });
         tabletEl.querySelector('#aerodeck-close-x').onclick = closePanel;
         tabletEl.querySelector('#aerodeck-plus-btn').onclick = () => { if (activeTab === 'flight' && !flight.active) { flight = blankFlight(); render(); } };
         tabletEl.querySelector('#aerodeck-minimize-btn').onclick = () => (minimized ? restore() : minimize());
@@ -3486,7 +3490,8 @@ function renderSidebar(sidebarEl) {
         if (minimized || activeTab === 'home' || activeTab === 'flight' || activeTab === 'aircraft' || activeTab === 'ofp' || activeTab === 'nav') {
             const activeEl = document.activeElement;
             const typing = activeEl && activeEl.tagName === 'INPUT' && tabletEl && tabletEl.contains(activeEl);
-            if (!typing) render();
+            const recentTouch = (Date.now() - lastUiInteractTs) < 700;
+            if (!typing && !recentTouch) render();
             else if (flight.active) { const strip = tabletEl && tabletEl.querySelector('#aerodeck-route-strip'); if (strip) renderRouteStrip(strip); }
         } else if (flight.active) { const strip = tabletEl && tabletEl.querySelector('#aerodeck-route-strip'); if (strip) renderRouteStrip(strip); }
     }, 1000);
