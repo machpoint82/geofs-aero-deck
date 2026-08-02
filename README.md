@@ -8,10 +8,11 @@
 
 AeroDeck turns a GeoFS flight into something closer to a real commercial operation — pilot registration and career progression, automatic airline/airport/aircraft detection, real weather, live airport diagrams, a live moving map, other-pilot tracking and chat, a full pre-flight checklist, and SimBrief integration for real passenger/cargo/fuel numbers instead of guesses.
 
-[![Version](https://img.shields.io/badge/version-1.0.0-cyan?style=flat-square)](https://github.com/machpoint82/geofs-aero-deck)
-[![GeoFS](https://img.shields.io/badge/GeoFS-3.9%20%7C%204.0-blue?style=flat-square)](https://www.geo-fs.com/)
-[![Tampermonkey](https://img.shields.io/badge/Tampermonkey-userscript-green?style=flat-square)](https://www.tampermonkey.net/)
-[![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)](LICENSE)
+![HomeSpace]( https://img.shields.io/badge/github-repo-blue?logo=github)
+[![Version](https://img.shields.io/badge/version-1.0.1-cyan?)](https://github.com/machpoint82/geofs-aero-deck/releases)
+[![GeoFS](https://img.shields.io/badge/GeoFS-3.9%20%7C%204.0-blue?)](https://www.geo-fs.com/)
+[![Tampermonkey](https://img.shields.io/badge/Tampermonkey-userscript-green?)](https://www.tampermonkey.net/)
+[![License](https://img.shields.io/badge/license-MIT-lightgrey?)](LICENSE)
 
 > **Status:** v1.0.0 testing build. Features and tab layout are still evolving.
 
@@ -48,7 +49,7 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) (or a compatible userscript manager).
 2. click on [this link](https://github.com/machpoint82/geofs-aero-deck/releases/latest/download/aerodeck-efb.user.js), It redirects you to the installation page.
-   (or download from [Releases](https://github.com/machpoint82/geofs-aero-deck/releases/latest) and open the `.user.js` file).
+   (or download from [Releases](https://github.com/machpoint82/geofs-aero-deck/releases/latest) .
 3. Open [GeoFS](https://www.geo-fs.com/). An **EFB** control appears with the other GeoFS UI buttons.
 4. Open the tablet. First launch asks for a pilot name. Your **Pilot ID** is generated once and ties to your logbook and career stats.
 
