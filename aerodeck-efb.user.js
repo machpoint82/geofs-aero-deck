@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AeroDeck EFB
 // @namespace    http://tampermonkey.net/
-// @version      1.0.2
+// @version      1.0.3
 // @updateURL    https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.user.js
 // @downloadURL  https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.user.js
 // @description  Airline operations EFB for GeoFS.
@@ -53,7 +53,10 @@
         CHAT_AGE_ACK: 'aerodeck_chat_age_ack',
         THEME: 'aerodeck_theme',
         SIMBRIEF_USERNAME: 'aerodeck_simbrief_username',
-        OPEN_SHORTCUT: 'aerodeck_open_shortcut'
+        OPEN_SHORTCUT: 'aerodeck_open_shortcut',
+        MENTION_ALERTS: 'aerodeck_mention_alerts',
+        CHART_LAYERS: 'aerodeck_chart_layers',
+        CHART_FOLLOW: 'aerodeck_chart_follow'
     };
 
     const CHARTS_BASE_URL = 'https://cdn.jsdelivr.net/gh/machpoint82/geofs-aero-deck@main/charts';
@@ -65,10 +68,32 @@
     const METAR_CACHE_MS = 10 * 60 * 1000;
 
     // Keep in sync with // @version above
-    const SCRIPT_VERSION = '1.0.2';
-    const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.js';
+    const SCRIPT_VERSION = '1.0.3';
+    const VERSION_CHECK_URL = 'https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/aerodeck-efb.user.js';
+    const CHANGELOG_URL = 'https://raw.githubusercontent.com/machpoint82/geofs-aero-deck/main/CHANGELOG.md';
     const RELEASES_URL = 'https://github.com/machpoint82/geofs-aero-deck/releases/latest';
+    const SCRIPT_CHANGELOG = {
+        '1.0.3': [
+            'Charts: decluttered labels, layer toggles (Taxi/Gates/Legend/Traffic), Follow',
+            'Aircraft doors: 3-column schematic + ground services; boarding needs DOOR 1L',
+            'Chat: @mention autocomplete, optional mention alerts, share ATIS',
+            'Leaderboard tab; Settings update notes'
+        ],
+        '1.0.2': [
+            'Removed aircraft mismatch prompt on Start Flight',
+            'Improved touch/click responsiveness',
+            'Fixed parking brake detection for flight checks'
+        ],
+        '1.0.1': [
+            'Keyboard shortcut to open EFB',
+            'Stability and UI polish'
+        ],
+        '1.0.0': [
+            'Initial testing build'
+        ]
+    };
     let remoteVersion = null;
+    let remoteChangelogText = null;
     let versionCheckDone = false;
     let lastUiInteractTs = 0;
     function markUiInteract() { lastUiInteractTs = Date.now(); }
@@ -625,6 +650,8 @@
     const CHAT_POLL_MS = 4000;
     const CHAT_SEND_COOLDOWN_MS = 2000;
 
+    let cachedOnlinePilots = []; // {id, name} for @ autocomplete
+
     async function fetchChatMessages() {
         if (!MULTIPLAYER_BACKEND_URL) return [];
         try {
@@ -632,7 +659,9 @@
             backendReachable = res.ok;
             const json = await res.json();
             if (!json) return [];
-            const arr = Object.values(json).filter(Boolean);
+            const arr = Object.entries(json)
+                .filter(([, v]) => v && v.ts)
+                .map(([key, v]) => Object.assign({ key }, v));
             arr.sort((a, b) => a.ts - b.ts);
             return arr.slice(-50);
         } catch (e) { backendReachable = false; return []; }
@@ -644,38 +673,131 @@
         const payload = { pilotId: profile.id, name: profile.name, text: text.slice(0, 200), ts: now };
         try { await fetch(`${MULTIPLAYER_BACKEND_URL}/aerodeck_chat.json`, { method: 'POST', body: JSON.stringify(payload) }); } catch (e) { /* best effort */ }
     }
+    function knownPilotNames(profile) {
+        const names = new Set();
+        if (profile && profile.name) names.add(profile.name);
+        chatMessages.forEach((m) => { if (m.name) names.add(m.name); });
+        cachedOnlinePilots.forEach((p) => { if (p.name) names.add(p.name); });
+        return Array.from(names).sort((a, b) => b.length - a.length);
+    }
+    function formatChatTextHtml(raw, profile) {
+        const names = knownPilotNames(profile);
+        let s = String(raw || '');
+        const hits = [];
+        names.forEach((name) => {
+            const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const re = new RegExp('@' + esc + '(?=\\s|$|[.,!?;:])', 'gi');
+            s = s.replace(re, (m) => {
+                const token = '\u0000' + hits.length + '\u0000';
+                hits.push(m);
+                return token;
+            });
+        });
+        s = s.replace(/@([A-Za-z0-9_\-.]{2,32})/g, (m) => {
+            const token = '\u0000' + hits.length + '\u0000';
+            hits.push(m);
+            return token;
+        });
+        let safe = escapeHtml(s);
+        hits.forEach((orig, i) => {
+            const isMe = profile && profile.name && orig.slice(1).toLowerCase() === profile.name.toLowerCase();
+            const html = `<span class="chat-mention${isMe ? ' me' : ''}">${escapeHtml(orig)}</span>`;
+            safe = safe.split('\u0000' + i + '\u0000').join(html);
+        });
+        return safe;
+    }
     function renderChatMessages(container) {
         const list = container || (tabletEl && tabletEl.querySelector('#aerodeck-chat-messages'));
         if (!list) return;
         const profile = getProfile();
+        const stickBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
         list.innerHTML = chatMessages.map((m) => {
             const isSelf = !!(profile && m.pilotId === profile.id);
+            const key = m.key || '';
             return `
-                <div class="aerodeck-chat-row ${isSelf ? 'self' : 'other'}">
+                <div class="aerodeck-chat-row ${isSelf ? 'self' : 'other'}" data-msg-key="${escapeHtml(key)}">
                     <div class="aerodeck-chat-bubble">
                         ${!isSelf ? `<div class="chat-name">${escapeHtml(m.name)}</div>` : ''}
-                        <div class="chat-text">${escapeHtml(m.text)}</div>
+                        <div class="chat-text">${formatChatTextHtml(m.text, profile)}</div>
                     </div>
                 </div>
             `;
-        }).join('') || `<div class="aerodeck-empty-note" style="padding:20px 0;">No messages yet — say hi.</div>`;
-        list.scrollTop = list.scrollHeight;
+        }).join('') || `<div class="aerodeck-empty-note" style="padding:20px 0;">No messages yet — say hi. Type @ to mention a pilot.</div>`;
+        if (stickBottom) list.scrollTop = list.scrollHeight;
     }
-    function fetchAndRenderChat() { fetchChatMessages().then((msgs) => { chatMessages = msgs; renderChatMessages(); }); }
+    function fetchAndRenderChat() {
+        fetchChatMessages().then((msgs) => {
+            chatMessages = msgs;
+            renderChatMessages();
+            detectMentionsInNewMessages(getProfile());
+        });
+        const profile = getProfile();
+        fetchAeroDeckPresence(profile ? profile.id : null).then((list) => {
+            cachedOnlinePilots = (list || []).map((p) => ({ id: p.id, name: p.callsign || p.name })).filter((p) => p.name);
+        }).catch(() => {});
+    }
 
-    function startPresenceBroadcast(profile) {
+    function startOfUtcWeekMs() {
+        const d = new Date();
+        const day = d.getUTCDay(); // 0 Sun
+        const diff = (day + 6) % 7; // Monday-start week
+        const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - diff, 0, 0, 0, 0));
+        return monday.getTime();
+    }
+    function getLocalWeekStats(pilotId) {
+        try {
+            const hist = gmGet(STORAGE.HISTORY_PREFIX + pilotId, []) || [];
+            const from = startOfUtcWeekMs();
+            let flights = 0, hours = 0;
+            hist.forEach((h) => {
+                const t = h.timestamp || h.endTs || h.ts || h.startTs || 0;
+                if (t >= from) {
+                    flights += 1;
+                    const ms = h.durationMs != null ? h.durationMs : ((h.durationMin || h.airTimeMin || 0) * 60000);
+                    hours += (Number(ms) || 0) / 3600000;
+                }
+            });
+            return { flights, hours: Math.round(hours * 10) / 10 };
+        } catch (e) { return { flights: 0, hours: 0 }; }
+    }
+    async function fetchLeaderboard() {
+        if (!MULTIPLAYER_BACKEND_URL) return [];
+        try {
+            const res = await fetch(`${MULTIPLAYER_BACKEND_URL}/aerodeck_leaderboard.json`);
+            if (!res.ok) return [];
+            const json = await res.json();
+            if (!json) return [];
+            const now = Date.now();
+            const weekMs = 8 * 24 * 3600 * 1000;
+            return Object.entries(json)
+                .filter(([, v]) => v && v.name && (now - (v.ts || 0)) < weekMs)
+                .map(([id, v]) => ({
+                    id, name: v.name,
+                    flightsWeek: Number(v.flightsWeek) || 0,
+                    hoursWeek: Number(v.hoursWeek) || 0
+                }))
+                .sort((a, b) => (b.hoursWeek - a.hoursWeek) || (b.flightsWeek - a.flightsWeek));
+        } catch (e) { return []; }
+    }
+        function startPresenceBroadcast(profile) {
         if (!MULTIPLAYER_BACKEND_URL || presenceBroadcastTimer) return;
         const broadcast = () => {
             const pos = getCurrentLatLon();
             if (!pos) return;
+            const week = getLocalWeekStats(profile.id);
             const payload = {
                 name: profile.name, lat: pos.lat, lon: pos.lon, heading: getCurrentHeading() || 0,
                 speed: getCurrentGroundSpeedKts() || 0, altitude: getCurrentAltitudeFt() || 0,
                 origin: flight.origin ? flight.origin.icao : null, destination: flight.destination ? flight.destination.icao : null,
-                ts: Date.now()
+                flightsWeek: week.flights, hoursWeek: week.hours, ts: Date.now()
             };
             fetch(`${MULTIPLAYER_BACKEND_URL}/aerodeck_presence/${profile.id}.json`, { method: 'PUT', body: JSON.stringify(payload) })
                 .then((r) => { backendReachable = r.ok; }).catch(() => { backendReachable = false; });
+            // Mirror a small leaderboard node (opt-in by broadcasting)
+            fetch(`${MULTIPLAYER_BACKEND_URL}/aerodeck_leaderboard/${profile.id}.json`, {
+                method: 'PUT',
+                body: JSON.stringify({ name: profile.name, flightsWeek: week.flights, hoursWeek: week.hours, ts: Date.now() })
+            }).catch(() => {});
         };
         broadcast();
         presenceBroadcastTimer = setInterval(broadcast, PRESENCE_BROADCAST_MS);
@@ -718,11 +840,40 @@
             const textBody = await gmFetchText(VERSION_CHECK_URL + '?t=' + Date.now(), 8000);
             const m = textBody.match(/@version\s+([0-9]+(?:\.[0-9]+)*)/);
             if (m) remoteVersion = m[1];
+            // Prefer SCRIPT_CHANGELOG embedded in remote file if present
+            const cl = textBody.match(/const SCRIPT_CHANGELOG\s*=\s*(\{[\s\S]*?\n\s*\});/);
+            if (cl) {
+                try {
+                    // eslint-disable-next-line no-new-func
+                    remoteChangelogText = (new Function('return ' + cl[1]))();
+                } catch (e2) { remoteChangelogText = null; }
+            }
         } catch (e) {
             console.warn('[AeroDeck] version check failed', e);
             remoteVersion = null;
         }
+        try {
+            if (!remoteChangelogText) {
+                const md = await gmFetchText(CHANGELOG_URL + '?t=' + Date.now(), 8000);
+                remoteChangelogText = md;
+            }
+        } catch (e) { /* optional */ }
         if (panelOpen && !minimized && activeTab === 'settings') render();
+    }
+    function changelogBulletsFor(version) {
+        if (!version) return [];
+        if (remoteChangelogText && typeof remoteChangelogText === 'object' && Array.isArray(remoteChangelogText[version])) {
+            return remoteChangelogText[version];
+        }
+        if (remoteChangelogText && typeof remoteChangelogText === 'string') {
+            // Parse ## vX.Y.Z sections from CHANGELOG.md
+            const re = new RegExp('##\\s*v?' + version.replace(/\./g, '\\.') + '\\b([\\s\\S]*?)(?=\n##\\s|$)', 'i');
+            const m = remoteChangelogText.match(re);
+            if (m) {
+                return m[1].split('\n').map((l) => l.replace(/^[-*]\s*/, '').trim()).filter((l) => l && !l.startsWith('#'));
+            }
+        }
+        return SCRIPT_CHANGELOG[version] || [];
     }
 
     async function fetchNameClaim(nameKey) {
@@ -763,6 +914,83 @@
     // ------------------------------- theme -------------------------------
 // ------------------------------- theme -------------------------------
     const THEME_CLASSES = ['theme-violet', 'theme-amber', 'theme-emerald', 'theme-rose', 'theme-sky', 'theme-slate', 'theme-coral', 'theme-lime', 'theme-indigo', 'theme-teal', 'theme-magenta', 'theme-gold', 'theme-mint', 'theme-crimson', 'theme-ocean', 'theme-grape', 'theme-forest'];
+
+    function getMentionAlertsEnabled() {
+        const v = gmGet(STORAGE.MENTION_ALERTS, true);
+        return v !== false;
+    }
+    function setMentionAlertsEnabled(on) { gmSet(STORAGE.MENTION_ALERTS, !!on); }
+    function defaultChartLayers() { return { taxi: true, gates: true, legend: true, aircraft: true }; }
+    function getChartLayers() {
+        const v = gmGet(STORAGE.CHART_LAYERS, null);
+        return Object.assign(defaultChartLayers(), v && typeof v === 'object' ? v : {});
+    }
+    function setChartLayer(key, on) {
+        const layers = getChartLayers();
+        layers[key] = !!on;
+        gmSet(STORAGE.CHART_LAYERS, layers);
+        applyChartLayers();
+    }
+    function getChartFollow() { return gmGet(STORAGE.CHART_FOLLOW, false) === true; }
+    function setChartFollow(on) { gmSet(STORAGE.CHART_FOLLOW, !!on); }
+    function applyChartLayers() {
+        if (!chartState) return;
+        const L = getChartLayers();
+        const map = {
+            taxi: ['gTaxi', 'gTaxiLabels'],
+            gates: ['gGates'],
+            legend: ['legend'],
+            aircraft: ['acEl', 'gOthers']
+        };
+        Object.keys(map).forEach((k) => {
+            map[k].forEach((ref) => {
+                if (ref === 'legend') {
+                    const el = tabletEl && tabletEl.querySelector('#aerodeck-chart-legend');
+                    if (el) el.style.display = L[k] ? '' : 'none';
+                    return;
+                }
+                const node = chartState[ref];
+                if (node) node.style.display = L[k] ? '' : 'none';
+            });
+        });
+    }
+    function flashMentionAlert() {
+        if (!getMentionAlertsEnabled()) return;
+        try {
+            if (tabletEl) {
+                tabletEl.classList.add('mention-flash');
+                setTimeout(() => { try { tabletEl.classList.remove('mention-flash'); } catch (e) {} }, 1200);
+            }
+            // soft beep via Web Audio
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            const ctx = flashMentionAlert._ctx || (flashMentionAlert._ctx = new Ctx());
+            const o = ctx.createOscillator();
+            const g = ctx.createGain();
+            o.type = 'sine'; o.frequency.value = 880;
+            g.gain.value = 0.04;
+            o.connect(g); g.connect(ctx.destination);
+            o.start();
+            g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+            o.stop(ctx.currentTime + 0.2);
+        } catch (e) { /* ignore */ }
+    }
+    let lastSeenChatTs = 0;
+    function detectMentionsInNewMessages(profile) {
+        if (!profile || !getMentionAlertsEnabled()) return;
+        const my = (profile.name || '').toLowerCase();
+        if (!my) return;
+        let newest = lastSeenChatTs;
+        chatMessages.forEach((m) => {
+            if (!m || !m.ts || m.ts <= lastSeenChatTs) return;
+            if (m.pilotId === profile.id) return;
+            const t = String(m.text || '');
+            if (t.toLowerCase().indexOf('@' + my) >= 0) flashMentionAlert();
+            if (m.ts > newest) newest = m.ts;
+        });
+        if (newest > lastSeenChatTs) lastSeenChatTs = newest;
+    }
+
     function getTheme() { return gmGet(STORAGE.THEME, 'default'); }
     function setTheme(name) {
         gmSet(STORAGE.THEME, name);
@@ -1335,84 +1563,101 @@ function applySimbriefToFlight() {
 
     function getDoorsForCapacity(cap) {
         const c = cap == null ? 150 : cap;
-        if (c <= 90) {
-            return [
-                { id: 'L1', label: 'LEFT FWD', type: 'pax', open: true },
-                { id: 'R1', label: 'RIGHT FWD', type: 'pax', open: true },
-                { id: 'FWDCARGO', label: 'FWD CARGO', type: 'cargo', open: true },
-                { id: 'L2', label: 'LEFT AFT', type: 'pax', open: true },
-                { id: 'R2', label: 'RIGHT AFT', type: 'pax', open: true }
-            ];
-        }
-        if (c <= 260) {
-            return [
-                { id: 'L1', label: 'LEFT FWD', type: 'pax', open: true },
-                { id: 'R1', label: 'RIGHT FWD', type: 'pax', open: true },
-                { id: 'FWDCARGO', label: 'FWD CARGO', type: 'cargo', open: true },
-                { id: 'L2', label: 'LEFT MID', type: 'pax', open: true },
-                { id: 'R2', label: 'RIGHT MID', type: 'pax', open: true },
-                { id: 'AFTCARGO', label: 'AFT CARGO', type: 'cargo', open: true },
-                { id: 'L3', label: 'LEFT AFT', type: 'pax', open: true },
-                { id: 'R3', label: 'RIGHT AFT', type: 'pax', open: true }
-            ];
-        }
-        return [
-            { id: 'L1', label: 'LEFT FWD', type: 'pax', open: true },
-            { id: 'R1', label: 'RIGHT FWD', type: 'pax', open: true },
-            { id: 'FWDCARGO', label: 'FWD CARGO', type: 'cargo', open: true },
-            { id: 'L2', label: 'LEFT MID', type: 'pax', open: true },
-            { id: 'R2', label: 'RIGHT MID', type: 'pax', open: true },
-            { id: 'BULKCARGO', label: 'BULK CARGO', type: 'cargo', open: true },
-            { id: 'AFTCARGO', label: 'AFT CARGO', type: 'cargo', open: true },
-            { id: 'L3', label: 'LEFT AFT', type: 'pax', open: true },
-            { id: 'R3', label: 'RIGHT AFT', type: 'pax', open: true }
+        // Ground services always available (toggle = connected / set)
+        const services = [
+            { id: 'CHOCKS', label: 'CHOCKS', type: 'service', open: true },
+            { id: 'GPU', label: 'GPU', type: 'service', open: true },
+            { id: 'ASU', label: 'ASU', type: 'service', open: true },
+            { id: 'PCA', label: 'PCA', type: 'service', open: true },
+            { id: 'SERVICES', label: 'SERVICES', type: 'service', open: true }
         ];
+        let doors;
+        if (c <= 90) {
+            doors = [
+                { id: 'L1', label: 'DOOR 1L', type: 'pax', open: true },
+                { id: 'R1', label: 'DOOR 1R', type: 'pax', open: true },
+                { id: 'FWDCARGO', label: 'FWD CARGO', type: 'cargo', open: true },
+                { id: 'L2', label: 'DOOR 2L', type: 'pax', open: true },
+                { id: 'R2', label: 'DOOR 2R', type: 'pax', open: true },
+                { id: 'AFTCARGO', label: 'AFT CARGO', type: 'cargo', open: true }
+            ];
+        } else if (c <= 260) {
+            doors = [
+                { id: 'L1', label: 'DOOR 1L', type: 'pax', open: true },
+                { id: 'R1', label: 'DOOR 1R', type: 'pax', open: true },
+                { id: 'FWDCARGO', label: 'FWD CARGO', type: 'cargo', open: true },
+                { id: 'L2', label: 'DOOR 2L', type: 'pax', open: true },
+                { id: 'R2', label: 'DOOR 2R', type: 'pax', open: true },
+                { id: 'AFTCARGO', label: 'AFT CARGO', type: 'cargo', open: true },
+                { id: 'L4', label: 'DOOR 4L', type: 'pax', open: true },
+                { id: 'R4', label: 'DOOR 4R', type: 'pax', open: true }
+            ];
+        } else {
+            doors = [
+                { id: 'L1', label: 'DOOR 1L', type: 'pax', open: true },
+                { id: 'R1', label: 'DOOR 1R', type: 'pax', open: true },
+                { id: 'FWDCARGO', label: 'FWD CARGO', type: 'cargo', open: true },
+                { id: 'L2', label: 'DOOR 2L', type: 'pax', open: true },
+                { id: 'R2', label: 'DOOR 2R', type: 'pax', open: true },
+                { id: 'BULKCARGO', label: 'BULK', type: 'cargo', open: true },
+                { id: 'AFTCARGO', label: 'AFT CARGO', type: 'cargo', open: true },
+                { id: 'L4', label: 'DOOR 4L', type: 'pax', open: true },
+                { id: 'R4', label: 'DOOR 4R', type: 'pax', open: true }
+            ];
+        }
+        return doors.concat(services);
     }
     function buildDoorsDiagramHtml(doors) {
         if (!doors || !doors.length) return '';
-        const POS = {
-            L1: { left: 2, top: 18 },
-            R1: { left: 66, top: 18 },
-            FWDCARGO: { left: 66, top: 28 },
-            L2: { left: 2, top: 42 },
-            R2: { left: 66, top: 42 },
-            BULKCARGO: { left: 66, top: 52 },
-            AFTCARGO: { left: 66, top: 60 },
-            L3: { left: 2, top: 72 },
-            R3: { left: 66, top: 72 },
-            L4: { left: 2, top: 82 },
-            R4: { left: 66, top: 82 }
-        };
-        const chips = doors.map((d, i) => {
-            const p = POS[d.id] || { left: (d.id && String(d.id)[0] === 'R') ? 66 : 2, top: 15 + i * 9 };
+        const leftIds = new Set(['L1', 'L2', 'L3', 'L4', 'CHOCKS', 'SERVICES']);
+        const rightIds = new Set(['R1', 'R2', 'R3', 'R4', 'FWDCARGO', 'AFTCARGO', 'BULKCARGO', 'GPU', 'ASU', 'PCA']);
+        function chip(d) {
             const open = !!d.open;
-            return `<button type="button" class="door-chip-btn ${open ? 'open' : 'closed'}" data-id="${escapeHtml(d.id)}"
-                style="left:${p.left}%;top:${p.top}%;">
+            const isService = d.type === 'service';
+            const set = isService && !open;
+            const state = isService ? (open ? 'OFF' : 'SET') : (open ? 'OPEN' : 'CLOSED');
+            const cls = set ? 'set' : (open ? 'open' : 'closed');
+            return `<button type="button" class="door-chip-btn ${cls}" data-id="${escapeHtml(d.id)}">
                 <span class="door-chip-label">${escapeHtml(d.label)}</span>
-                <span class="door-chip-state">${open ? 'OPEN' : 'CLOSED'}</span>
+                <span class="door-chip-state">${state}</span>
             </button>`;
-        }).join('');
+        }
+        const left = doors.filter((d) => leftIds.has(d.id) || (!rightIds.has(d.id) && String(d.id)[0] === 'L')).map(chip).join('');
+        const right = doors.filter((d) => rightIds.has(d.id) || String(d.id)[0] === 'R').map(chip).join('');
+        // any leftovers (unknown ids) go left
+        const placed = new Set([...leftIds, ...rightIds]);
+        const extra = doors.filter((d) => !leftIds.has(d.id) && !rightIds.has(d.id) && String(d.id)[0] !== 'L' && String(d.id)[0] !== 'R').map(chip).join('');
         const plane = `
             <svg viewBox="0 0 200 360" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" class="door-plane-svg">
-                <g class="door-plane" fill="none" stroke="currentColor" stroke-width="1.6" opacity="0.85">
-                    <path d="M100 18 C108 18 114 30 114 48 L114 300 C114 320 106 340 100 348 C94 340 86 320 86 300 L86 48 C86 30 92 18 100 18 Z"/>
-                    <path d="M100 18 C96 10 96 6 100 4 C104 6 104 10 100 18"/>
-                    <path d="M86 150 L18 190 L22 200 L86 175 Z"/>
-                    <path d="M114 150 L182 190 L178 200 L114 175 Z"/>
-                    <ellipse cx="48" cy="188" rx="10" ry="16"/>
-                    <ellipse cx="152" cy="188" rx="10" ry="16"/>
-                    <path d="M86 300 L50 330 L54 334 L86 312 Z"/>
-                    <path d="M114 300 L150 330 L146 334 L114 312 Z"/>
-                    <path d="M100 300 L100 348 L92 336 L100 300 L108 336 Z"/>
+                <defs>
+                    <linearGradient id="ad-plane-fill" x1="0" y1="0" x2="1" y2="1">
+                        <stop offset="0%" stop-color="#0a1a2e"/>
+                        <stop offset="100%" stop-color="#0d2844"/>
+                    </linearGradient>
+                </defs>
+                <g class="door-plane">
+                    <path d="M100 18 C108 18 114 30 114 48 L114 300 C114 320 106 340 100 348 C94 340 86 320 86 300 L86 48 C86 30 92 18 100 18 Z"
+                        fill="url(#ad-plane-fill)" stroke="#3dd6f5" stroke-width="1.8"/>
+                    <path d="M100 18 C96 10 96 6 100 4 C104 6 104 10 100 18" fill="none" stroke="#3dd6f5" stroke-width="1.5"/>
+                    <path d="M86 150 L18 190 L22 200 L86 175 Z" fill="none" stroke="#3dd6f5" stroke-width="1.6"/>
+                    <path d="M114 150 L182 190 L178 200 L114 175 Z" fill="none" stroke="#3dd6f5" stroke-width="1.6"/>
+                    <ellipse cx="48" cy="188" rx="11" ry="17" fill="none" stroke="#3dd6f5" stroke-width="1.4"/>
+                    <ellipse cx="152" cy="188" rx="11" ry="17" fill="none" stroke="#3dd6f5" stroke-width="1.4"/>
+                    <path d="M86 300 L50 330 L54 334 L86 312 Z" fill="none" stroke="#3dd6f5" stroke-width="1.4"/>
+                    <path d="M114 300 L150 330 L146 334 L114 312 Z" fill="none" stroke="#3dd6f5" stroke-width="1.4"/>
+                    <path d="M100 300 L100 348 L92 336 L100 300 L108 336 Z" fill="none" stroke="#3dd6f5" stroke-width="1.4"/>
+                    <g stroke="#2a9bb8" stroke-width="1" opacity="0.45">
+                        <line x1="92" y1="70" x2="92" y2="290"/><line x1="108" y1="70" x2="108" y2="290"/>
+                    </g>
                 </g>
             </svg>`;
         return `
-            <div class="aerodeck-doors-diagram">
-                ${plane}
-                <div class="door-chips-layer">${chips}</div>
+            <div class="aerodeck-doors-diagram schematic">
+                <div class="door-col door-col-left">${left}${extra}</div>
+                <div class="door-plane-wrap">${plane}</div>
+                <div class="door-col door-col-right">${right}</div>
             </div>`;
     }
-
 
     function setAllDoors(doors, open) {
         return doors.map((d) => Object.assign({}, d, { open: !!open }));
@@ -1426,7 +1671,8 @@ function applySimbriefToFlight() {
         return Math.round(flight.paxTarget * frac);
     }
     function getStartFlightChecks() {
-        const doorsClosed = flight.doors.length > 0 && flight.doors.every((d) => !d.open);
+        const doorLike = (flight.doors || []).filter((d) => d.type !== 'service');
+        const doorsClosed = doorLike.length > 0 && doorLike.every((d) => !d.open);
         const boardingDone = flight.boardingStatus === 'complete' || flight.paxTarget === 0;
         return [
             { label: 'On ground', ok: getOnGround() },
@@ -1797,7 +2043,8 @@ function applySimbriefToFlight() {
             const a = nodes[e.n1], b = nodes[e.n2];
             if (!a || !b) return;
             const [x1, y1] = px(a.lat, a.lon), [x2, y2] = px(b.lat, b.lon);
-            gTaxi.appendChild(el('line', { x1, y1, x2, y2, class: 'taxi-line' }));
+            const isLinkEdge = /^link\d*$/i.test((e.name || '').trim());
+            gTaxi.appendChild(el('line', { x1, y1, x2, y2, class: isLinkEdge ? 'taxi-line taxi-link' : 'taxi-line taxi-named' }));
             (groups[e.name] = groups[e.name] || []).push({ x1, y1, x2, y2 });
         });
         viewport.appendChild(gTaxi);
@@ -1813,50 +2060,64 @@ function applySimbriefToFlight() {
             }
             return false;
         }
-        const TAXI_LABEL_SPACING = 210;
-        // Named taxiways get first pick of space, LINK segments (Gateway's unnamed
-        // connector ids, not real charted designators) are placed after and yield to them.
-        const groupNames = Object.keys(groups).sort((a, b) => {
-            const la = /^link\d*$/i.test(a) ? 1 : 0, lb = /^link\d*$/i.test(b) ? 1 : 0;
-            return la - lb;
-        });
+        // Named taxiways only — hide LINK* designators (clutter). Max 2 labels per name.
+        const MIN_LABEL_SEP = 150;
+        const groupNames = Object.keys(groups).filter((n) => !/^link\d*$/i.test((n || '').trim()))
+            .sort((a, b) => String(a).length - String(b).length);
         groupNames.forEach((name) => {
-            let lastX = null, lastY = null;
-            const isLink = /^link\d*$/i.test((name || '').trim());
-            const fontSize = isLink ? 9 : 11;
-            groups[name].forEach((seg) => {
+            const fontSize = 8;
+            const candidates = (groups[name] || []).map((seg) => {
                 const mx = (seg.x1 + seg.x2) / 2, my = (seg.y1 + seg.y2) / 2;
-                if (pointInAnyRunway(mx, my)) return;
-                if (lastX === null || Math.hypot(mx - lastX, my - lastY) >= TAXI_LABEL_SPACING) {
-                    const rect = labelRect(mx, my, name, fontSize);
-                    if (!rectFree(rect)) return;
-                    const t = el('text', { x: mx, y: my, class: isLink ? 'taxi-label taxi-label-link' : 'taxi-label taxi-label-named', 'text-anchor': 'middle' });
-                    t.textContent = name;
-                    gTaxiLabels.appendChild(t);
-                    placedLabelRects.push(rect);
-                    lastX = mx; lastY = my;
-                }
-            });
+                const len = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+                return { mx, my, len };
+            }).filter((c) => !pointInAnyRunway(c.mx, c.my))
+              .sort((a, b) => b.len - a.len);
+            const picked = [];
+            for (const c of candidates) {
+                if (picked.length >= 2) break;
+                if (picked.some((p) => Math.hypot(p.mx - c.mx, p.my - c.my) < MIN_LABEL_SEP)) continue;
+                const rect = labelRect(c.mx, c.my, name, fontSize);
+                if (!rectFree(rect)) continue;
+                const tw = Math.max(10, String(name).length * 4.6);
+                const th = 10;
+                const bg = el('rect', {
+                    x: c.mx - tw / 2 - 2, y: c.my - th / 2 - 0.5, width: tw + 4, height: th + 1, rx: 2, ry: 2,
+                    class: 'taxi-badge'
+                });
+                gTaxiLabels.appendChild(bg);
+                const t = el('text', { x: c.mx, y: c.my + 3, class: 'taxi-label taxi-label-named', 'text-anchor': 'middle' });
+                t.textContent = name;
+                gTaxiLabels.appendChild(t);
+                placedLabelRects.push(rect);
+                picked.push(c);
+            }
         });
         viewport.appendChild(gTaxiLabels);
         viewport.appendChild(gRwyLabels);
 
         const gGates = el('g', {});
         function shortGateLabel(name) { if (!name) return ''; const parts = name.trim().split(/\s+/); return parts[parts.length - 1]; }
-        const GATE_LABEL_SPACING = 32, GATE_TICK_SPACING = 9, placedGateLabels = [], placedGateTicks = [];
+        // Show more gates: tighter spacing, always draw tick; labels when space allows
+        const GATE_LABEL_SPACING = 16, GATE_TICK_SPACING = 4, placedGateLabels = [], placedGateTicks = [];
         (data.gates || []).forEach((g) => {
             const [x, y] = px(g.lat, g.lon);
             const tickTooClose = placedGateTicks.some((p) => Math.hypot(p[0] - x, p[1] - y) < GATE_TICK_SPACING);
             if (tickTooClose) return;
             placedGateTicks.push([x, y]);
-            const tick = el('line', { x1: x, y1: y - 3, x2: x, y2: y + 3, class: 'gate-tick' });
-            tick.appendChild(el('title', {})).textContent = (g.name || 'Gate') + (g.airline_code ? ' · ' + g.airline_code.toUpperCase() : '');
+            const tick = el('line', { x1: x, y1: y - 2.5, x2: x, y2: y + 2.5, class: 'gate-tick' });
+            const title = el('title', {});
+            title.textContent = (g.name || 'Gate') + (g.airline_code ? ' · ' + String(g.airline_code).toUpperCase() : '');
+            tick.appendChild(title);
             gGates.appendChild(tick);
             const gateText = shortGateLabel(g.name);
+            if (!gateText) return;
             const tooCloseToGate = placedGateLabels.some((p) => Math.hypot(p[0] - x, p[1] - y) < GATE_LABEL_SPACING);
-            const rect = labelRect(x + 4 + estLabelWidth(gateText, 8.5) / 2, y + 2.5, gateText, 8.5);
-            if (!tooCloseToGate && rectFree(rect)) {
-                const t = el('text', { x: x + 4, y: y + 2.5, class: 'gate-label' }); t.textContent = gateText; gGates.appendChild(t);
+            const rect = labelRect(x + 3 + estLabelWidth(gateText, 7.5) / 2, y + 2, gateText, 7.5);
+            // Prefer showing gate numbers even if slightly near taxi labels
+            if (!tooCloseToGate) {
+                const t = el('text', { x: x + 3, y: y + 2.5, class: 'gate-label' });
+                t.textContent = gateText;
+                gGates.appendChild(t);
                 placedGateLabels.push([x, y]);
                 placedLabelRects.push(rect);
             }
@@ -1902,7 +2163,9 @@ function applySimbriefToFlight() {
             container.removeEventListener('mouseup', onUp);
             container.removeEventListener('mouseleave', onUp);
         };
-        return { svg, px, acEl, acTitle, gOthers, freqRows };
+        const out = { svg, px, acEl, acTitle, gOthers, gTaxi, gTaxiLabels, gGates, freqRows };
+        setTimeout(applyChartLayers, 0);
+        return out;
     }
     function renderChartLegend(legendEl, freqRows) {
         const swatches = `
@@ -1923,13 +2186,35 @@ function applySimbriefToFlight() {
         if (!pos) return;
         const heading = getCurrentHeading() || 0;
         const [x, y] = chartState.px(pos.lat, pos.lon);
+        const layers = getChartLayers();
         const within = x > -300 && x < 1300 && y > -300 && y < 1000;
-        chartState.acEl.style.display = within ? '' : 'none';
-        chartState.acEl.setAttribute('transform', `translate(${x},${y}) rotate(${heading})`);
+        if (chartState.acEl) {
+            chartState.acEl.style.display = (layers.aircraft && within) ? '' : 'none';
+            chartState.acEl.setAttribute('transform', `translate(${x},${y}) rotate(${heading})`);
+        }
         if (chartState.acTitle) {
             const profile = getProfile();
             chartState.acTitle.textContent = buildAircraftTooltipText(profile ? profile.name : 'You', flight.origin, flight.destination, getCurrentGroundSpeedKts(), getCurrentAltitudeFt());
         }
+        // Follow-me: keep aircraft near center of current pan/zoom
+        if (getChartFollow() && chartState.svg && within) {
+            try {
+                const st = chartState;
+                // chartViewState stores pan/zoom; nudge pan so aircraft sits mid-viewBox
+                const icao = currentChartTargetIcao();
+                const view = icao ? (chartViewState[icao] || { zoom: 1, panX: 0, panY: 0 }) : { zoom: 1, panX: 0, panY: 0 };
+                const zoom = view.zoom || 1;
+                const targetPanX = 500 - x * zoom;
+                const targetPanY = 350 - y * zoom;
+                // smooth factor
+                view.panX = view.panX * 0.7 + targetPanX * 0.3;
+                view.panY = view.panY * 0.7 + targetPanY * 0.3;
+                if (icao) chartViewState[icao] = view;
+                const vp = st.svg.querySelector('#chart-viewport');
+                if (vp) vp.setAttribute('transform', `translate(${view.panX},${view.panY}) scale(${zoom})`);
+            } catch (e) { /* ignore */ }
+        }
+        applyChartLayers();
     }
     function updateChartOtherAircraft() {
         if (!chartState || !chartState.gOthers) return;
@@ -1968,6 +2253,13 @@ function applySimbriefToFlight() {
                 <input id="aerodeck-chart-icao-input" class="aerodeck-input" style="max-width:140px;" type="text" placeholder="ICAO e.g. KJFK" maxlength="4" value="${escapeHtml(chartSearchText)}">
                 <button id="aerodeck-chart-load-btn" class="aerodeck-btn secondary" style="margin-top:0;width:auto;padding:8px 14px;">LOAD</button>
             </div>
+            <div class="aerodeck-chart-tools">
+                <label class="aerodeck-map-toggle"><input type="checkbox" id="ad-layer-taxi" ${getChartLayers().taxi ? 'checked' : ''}> Taxi</label>
+                <label class="aerodeck-map-toggle"><input type="checkbox" id="ad-layer-gates" ${getChartLayers().gates ? 'checked' : ''}> Gates</label>
+                <label class="aerodeck-map-toggle"><input type="checkbox" id="ad-layer-legend" ${getChartLayers().legend ? 'checked' : ''}> Legend</label>
+                <label class="aerodeck-map-toggle"><input type="checkbox" id="ad-layer-aircraft" ${getChartLayers().aircraft ? 'checked' : ''}> Traffic</label>
+                <label class="aerodeck-map-toggle"><input type="checkbox" id="ad-chart-follow" ${getChartFollow() ? 'checked' : ''}> Follow</label>
+            </div>
             <div id="aerodeck-chart-status" class="aerodeck-card muted" style="display:none;"></div>
             <div id="aerodeck-chart-stage" style="position:relative;flex:1;min-height:0;">
                 <div id="aerodeck-chart-canvas"></div>
@@ -1986,6 +2278,12 @@ function applySimbriefToFlight() {
             setTimeout(() => { if (chartState) updateChartAircraft(); }, 60);
         };
         if (tabletEl) tabletEl.classList.toggle('charts-maximized', chartsMaximized && activeTab === 'charts');
+        [['taxi', 'ad-layer-taxi'], ['gates', 'ad-layer-gates'], ['legend', 'ad-layer-legend'], ['aircraft', 'ad-layer-aircraft']].forEach(([key, id]) => {
+            const el = container.querySelector('#' + id);
+            if (el) el.onchange = () => { setChartLayer(key, el.checked); };
+        });
+        const followEl = container.querySelector('#ad-chart-follow');
+        if (followEl) followEl.onchange = () => { setChartFollow(followEl.checked); };
         const statusEl = container.querySelector('#aerodeck-chart-status');
         function renderStatus() {
             if (chartLoadState.status === 'loading') { statusEl.style.display = 'block'; statusEl.innerHTML = `Loading diagram for ${escapeHtml(chartLoadState.icao)}…`; }
@@ -2043,6 +2341,7 @@ function applySimbriefToFlight() {
 
     const ICON_OFP = `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 2h9l5 5v15a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M14 2v6h6M8 13h8M8 17h8M8 9h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
     const ICON_NAV = `<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M12 12l4-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+    const ICON_LEADER = `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 20h12M8 20V10h3v10M13 20V6h3v14M4 10h3v2H4zM17 8h3v2h-3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
     const ICON_GALLERY = `<svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="10" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3 17l5-4 4 3 4-5 5 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
     const ICON_SETTINGS = `<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 13a7.7 7.7 0 000-2l2-1.5-2-3.4-2.3.9a7.6 7.6 0 00-1.8-1L15 3h-4l-.3 2.5a7.6 7.6 0 00-1.8 1l-2.3-.9-2 3.4L6.6 11a7.7 7.7 0 000 2l-2 1.5 2 3.4 2.3-.9c.55.44 1.16.79 1.8 1L11 21h4l.3-2.5c.64-.21 1.25-.56 1.8-1l2.3.9 2-3.4-2-1.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
     const ICON_HISTORY = `<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3.5 3.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
@@ -2240,17 +2539,30 @@ function applySimbriefToFlight() {
             #aerodeck-chart-stage { position: relative; flex: 1; min-height: 0; }
             #aerodeck-chart-stage #aerodeck-chart-canvas { position: absolute; inset: 0; }
             #aerodeck-chart-canvas svg, #aerodeck-mini-canvas svg { width: 100%; height: 100%; display: block; }
-            #aerodeck-chart-canvas .apron, #aerodeck-mini-canvas .apron { fill: #213a56; stroke: none; }
-            #aerodeck-chart-canvas .apron.terminal, #aerodeck-mini-canvas .apron.terminal { fill: #2e4a6c; }
-            #aerodeck-chart-canvas .terminal-label, #aerodeck-mini-canvas .terminal-label { fill: #cfe0ee; font-size: 11px; font-weight: 800; letter-spacing: 1px; }
-            #aerodeck-chart-canvas .runway, #aerodeck-mini-canvas .runway { fill: #0a1420; stroke: #f2f6fa; stroke-width: 1.6; }
-            #aerodeck-chart-canvas .rwy-label, #aerodeck-mini-canvas .rwy-label { fill: #f6f8fa; font-size: 14px; font-weight: 800; }
-            #aerodeck-chart-canvas .taxi-line, #aerodeck-mini-canvas .taxi-line { stroke: #f6c343; stroke-width: 2; opacity: 0.92; }
-            #aerodeck-chart-canvas .taxi-label, #aerodeck-mini-canvas .taxi-label { font-weight: 800; }
-            #aerodeck-chart-canvas .taxi-label-named, #aerodeck-mini-canvas .taxi-label-named { fill: #6ee7b7; font-size: 11px; }
-            #aerodeck-chart-canvas .taxi-label-link, #aerodeck-mini-canvas .taxi-label-link { fill: #6b8bb0; font-size: 9px; font-weight: 700; }
-            #aerodeck-chart-canvas .gate-tick, #aerodeck-mini-canvas .gate-tick { stroke: #e39bef; stroke-width: 1.8; }
-            #aerodeck-chart-canvas .gate-label, #aerodeck-mini-canvas .gate-label { fill: #e9b8f2; font-size: 8.5px; font-weight: 600; }
+            .aerodeck-chart-tools { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; margin:0 0 8px; padding:0 2px; }
+            #aerodeck-tablet.mention-flash #aerodeck-status-strip, #aerodeck-tablet.mention-flash #aerodeck-route-strip {
+                animation: ad-mention-pulse 0.6s ease 2;
+            }
+            @keyframes ad-mention-pulse {
+                0%,100% { filter: none; }
+                50% { filter: drop-shadow(0 0 6px var(--ad-accent)); }
+            }
+            #aerodeck-chart-canvas, #aerodeck-mini-canvas { background: #0b1524; }
+            #aerodeck-chart-canvas .apron, #aerodeck-mini-canvas .apron { fill: #1a334d; stroke: #2a4a68; stroke-width: 0.6; }
+            #aerodeck-chart-canvas .apron.terminal, #aerodeck-mini-canvas .apron.terminal { fill: #243f5c; stroke: #3a5a7a; }
+            #aerodeck-chart-canvas .terminal-label, #aerodeck-mini-canvas .terminal-label { fill: #d6e6f4; font-size: 11px; font-weight: 800; letter-spacing: 0.8px; }
+            #aerodeck-chart-canvas .runway, #aerodeck-mini-canvas .runway { fill: #2a3038; stroke: #e8eef4; stroke-width: 1.4; }
+            #aerodeck-chart-canvas .rwy-label, #aerodeck-mini-canvas .rwy-label { fill: #ffffff; font-size: 13px; font-weight: 800; letter-spacing: 0.5px; }
+            #aerodeck-chart-canvas .taxi-line, #aerodeck-mini-canvas .taxi-line { stroke-linecap: round; stroke-linejoin: round; }
+            #aerodeck-chart-canvas .taxi-named, #aerodeck-mini-canvas .taxi-named { stroke: #c9a227; stroke-width: 5.5; opacity: 0.95; }
+            #aerodeck-chart-canvas .taxi-link, #aerodeck-mini-canvas .taxi-link { stroke: #8a9a6a; stroke-width: 3.2; opacity: 0.75; }
+            #aerodeck-chart-canvas .taxi-badge, #aerodeck-mini-canvas .taxi-badge { fill: #1a1a1a; stroke: #e8c84a; stroke-width: 1; }
+            #aerodeck-chart-canvas .taxi-badge-link, #aerodeck-mini-canvas .taxi-badge-link { fill: #152030; stroke: #4a6280; stroke-width: 0.8; }
+            #aerodeck-chart-canvas .taxi-label, #aerodeck-mini-canvas .taxi-label { font-weight: 800; pointer-events: none; }
+            #aerodeck-chart-canvas .taxi-label-named, #aerodeck-mini-canvas .taxi-label-named { fill: #f5e6a0; font-size: 8px; }
+            #aerodeck-chart-canvas .taxi-label-link, #aerodeck-mini-canvas .taxi-label-link { fill: #9ab0c8; font-size: 8.5px; font-weight: 700; }
+            #aerodeck-chart-canvas .gate-tick, #aerodeck-mini-canvas .gate-tick { stroke: #c084fc; stroke-width: 1.8; }
+            #aerodeck-chart-canvas .gate-label, #aerodeck-mini-canvas .gate-label { fill: #e9d5ff; font-size: 7.5px; font-weight: 700; }
             #aerodeck-chart-canvas .aircraft, #aerodeck-mini-canvas .aircraft { fill: #f6c343; stroke: #052024; stroke-width: 0.6; }
             #aerodeck-chart-canvas .other-aircraft, #aerodeck-mini-canvas .other-aircraft { fill: #3b82f6; stroke: #052024; stroke-width: 0.6; opacity: 0.92; }
             .aerodeck-chart-legend { position: absolute; left: 10px; top: 10px; background: rgba(5,10,18,0.82); border: 1px solid #1e3552; border-radius: 8px; padding: 9px 11px; font-size: 10px; color: #cfe0ee; display: flex; flex-direction: column; gap: 4px; max-width: 140px; }
@@ -2260,7 +2572,7 @@ function applySimbriefToFlight() {
             .chart-legend-freqs > div { display: flex; justify-content: space-between; gap: 10px; }
             .chart-freq-label { color: #8397ae; font-weight: 700; letter-spacing: 0.5px; }
             .chart-freq-val { color: #22d3ee; font-family: 'Consolas', monospace; }
-            .aerodeck-chat-panel { display: flex; flex-direction: column; border: 1px solid #1e3552; border-radius: 12px; overflow: hidden; background: #0a1729; height: calc(100% - 8px); min-height: 280px; }
+            .aerodeck-chat-panel { position: relative; display: flex; flex-direction: column; border: 1px solid #1e3552; border-radius: 12px; overflow: hidden; background: #0a1729; height: calc(100% - 8px); min-height: 280px; }
             .aerodeck-chat-messages { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 9px; }
             .aerodeck-chat-row { display: flex; }
             .aerodeck-chat-row.self { justify-content: flex-end; }
@@ -2272,19 +2584,33 @@ function applySimbriefToFlight() {
             .aerodeck-chat-input-row { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid #1e3552; background: #0e2038; }
             .aerodeck-chat-input-row .aerodeck-input { flex: 1; border-radius: 20px; padding: 9px 15px; }
             .aerodeck-chat-input-row .aerodeck-btn { margin-top: 0; width: auto; padding: 10px 18px; border-radius: 20px; }
+            .chat-mention { color: var(--ad-accent); font-weight: 800; }
+            .chat-mention.me { background: rgba(34,211,238,0.18); color: #7ef0ff; padding: 0 4px; border-radius: 4px; }
+            .aerodeck-mention-dd { position: absolute; left: 12px; right: 12px; bottom: 58px; max-height: 140px; overflow: auto;
+                background: #0c1a2e; border: 1px solid #2a4060; border-radius: 10px; z-index: 30; }
+            .aerodeck-mention-dd button { display: block; width: 100%; text-align: left; border: none; background: transparent;
+                color: #eef2f7; padding: 8px 12px; font-size: 12px; cursor: pointer; }
+            .aerodeck-mention-dd button:hover, .aerodeck-mention-dd button.active { background: rgba(34,211,238,0.12); color: var(--ad-accent); }
 
-            .aerodeck-doors-diagram { position: relative; background: #0a1729; border: 1px solid #1e3552; border-radius: 12px; padding: 8px; margin-top: 6px; color: #7dd3fc; min-height: 280px; }
-            .aerodeck-doors-diagram .door-plane-svg { display: block; width: 100%; height: 300px; pointer-events: none; }
-            .aerodeck-doors-diagram .door-chips-layer { position: absolute; inset: 8px; pointer-events: none; }
+            .aerodeck-doors-diagram { background: linear-gradient(160deg,#071421 0%,#0a1c30 100%); border: 1px solid #1e3552; border-radius: 12px; padding: 10px 8px; margin-top: 6px; color: #7dd3fc; overflow: hidden; }
+            .aerodeck-doors-diagram.schematic { display: grid; grid-template-columns: minmax(96px, 1fr) minmax(140px, 1.35fr) minmax(96px, 1fr); gap: 8px; align-items: center; min-height: 340px; }
+            .aerodeck-doors-diagram .door-plane-wrap { display: flex; align-items: center; justify-content: center; min-height: 320px; }
+            .aerodeck-doors-diagram .door-plane-svg { display: block; width: 100%; height: 340px; max-height: 380px; pointer-events: none; }
+            .aerodeck-doors-diagram .door-col { display: flex; flex-direction: column; gap: 7px; justify-content: center; }
+            .aerodeck-doors-diagram .door-col-left { align-items: stretch; }
+            .aerodeck-doors-diagram .door-col-right { align-items: stretch; }
             .aerodeck-doors-diagram .door-chip-btn {
-                position: absolute; pointer-events: auto; z-index: 2;
-                width: 32%; max-width: 110px; padding: 5px 4px; border-radius: 7px;
-                border: 1.5px solid #3d5675; background: #132a44; color: #eef2f7;
-                cursor: pointer; font-family: inherit; line-height: 1.15; text-align: center;
+                position: relative; pointer-events: auto; z-index: 2; width: 100%;
+                padding: 7px 8px; border-radius: 7px;
+                border: 1.5px solid #3a5575; background: rgba(12, 28, 48, 0.92); color: #e8f0f8;
+                cursor: pointer; font-family: inherit; line-height: 1.2; text-align: left;
+                box-shadow: 0 0 0 1px rgba(0,0,0,0.25);
             }
-            .aerodeck-doors-diagram .door-chip-btn.open { border-color: #34d399; background: rgba(52,211,153,0.22); }
-            .aerodeck-doors-diagram .door-chip-btn.closed { border-color: #3d5675; background: #132a44; }
-            .aerodeck-doors-diagram .door-chip-label { display: block; font-size: 9px; font-weight: 800; letter-spacing: 0.2px; }
+            .aerodeck-doors-diagram .door-chip-btn.open { border-color: #34d399; background: rgba(52,211,153,0.16); }
+            .aerodeck-doors-diagram .door-chip-btn.closed { border-color: #3a5575; background: rgba(12, 28, 48, 0.92); }
+            .aerodeck-doors-diagram .door-chip-btn.set { border-color: #f0c14a; background: rgba(240,193,74,0.22); color: #ffe9a8; }
+            .aerodeck-doors-diagram .door-chip-btn.set .door-chip-state { color: #f0c14a; }
+            .aerodeck-doors-diagram .door-chip-label { display: block; font-size: 9px; font-weight: 800; letter-spacing: 0.4px; }
             .aerodeck-doors-diagram .door-chip-state { display: block; font-size: 8px; font-weight: 700; color: #8397ae; margin-top: 2px; }
             .aerodeck-doors-diagram .door-chip-btn.open .door-chip-state { color: #34d399; }
 
@@ -2598,23 +2924,153 @@ function applySimbriefToFlight() {
     }
 
     // ------------------------------- CHAT tab -------------------------------
-    function renderChatTab(container, profile) {
+
+    function renderLeaderboardTab(container, profile) {
+        container.innerHTML = `<div class="aerodeck-card"><div class="aerodeck-label">This week (UTC)</div>
+            <div class="aerodeck-airline-meta" style="margin-bottom:10px;">Hours &amp; flights from AeroDeck pilots who broadcast presence. Opt-in via multiplayer backend.</div>
+            <div id="aerodeck-leader-list"><div class="aerodeck-empty-note">Loading…</div></div>
+            <div class="aerodeck-airline-meta" style="margin-top:12px;" id="aerodeck-leader-you"></div>
+        </div>`;
+        if (profile) {
+            const me = getLocalWeekStats(profile.id);
+            const you = container.querySelector('#aerodeck-leader-you');
+            if (you) you.textContent = `You · ${me.flights} flights · ${me.hours} h (from local logbook)`;
+        }
+        fetchLeaderboard().then((rows) => {
+            const list = container.querySelector('#aerodeck-leader-list');
+            if (!list) return;
+            if (!rows.length) {
+                list.innerHTML = `<div class="aerodeck-empty-note">No leaderboard data yet — fly with AeroDeck online this week.</div>`;
+                return;
+            }
+            list.innerHTML = rows.slice(0, 25).map((r, i) => {
+                const mine = profile && r.id === profile.id;
+                return `<div class="aerodeck-leader-row${mine ? ' me' : ''}">
+                    <span class="aerodeck-leader-rank">${i + 1}</span>
+                    <span class="aerodeck-leader-name">${escapeHtml(r.name)}</span>
+                    <span class="aerodeck-leader-stat">${r.hours} h</span>
+                    <span class="aerodeck-leader-stat">${r.flights} fl</span>
+                </div>`;
+            }).join('');
+        });
+    }
+
+function renderChatTab(container, profile) {
         if (!gmGet(STORAGE.CHAT_AGE_ACK, false)) {
             container.innerHTML = `<div class="aerodeck-card" style="margin-top:0;"><div style="font-size:12px;color:#dbe6f0;margin-bottom:10px;line-height:1.5;">Live chat lets you message other AeroDeck pilots. By enabling it, you confirm you are 13 years of age or older.</div><div style="display:flex;gap:8px;"><button id="aerodeck-chat-agegate-confirm" class="aerodeck-btn" style="margin-top:0;">I'M 13+ — ENABLE CHAT</button></div></div>`;
             container.querySelector('#aerodeck-chat-agegate-confirm').onclick = () => { gmSet(STORAGE.CHAT_AGE_ACK, true); chatEnabled = true; render(); };
             return;
         }
         chatEnabled = true;
-        container.innerHTML = `<div class="aerodeck-chat-panel"><div id="aerodeck-chat-messages" class="aerodeck-chat-messages"></div><div class="aerodeck-chat-input-row"><input id="aerodeck-chat-input" class="aerodeck-input" type="text" placeholder="Message other AeroDeck pilots…" maxlength="200"><button id="aerodeck-chat-send" class="aerodeck-btn">SEND</button></div></div>`;
+        container.innerHTML = `<div class="aerodeck-chat-panel" style="position:relative;">
+            <div style="display:flex;gap:6px;padding:0 0 6px;flex-wrap:wrap;">
+                <button type="button" id="aerodeck-share-atis-orig" class="aerodeck-btn secondary" style="margin:0;width:auto;padding:6px 10px;font-size:10px;">Share origin ATIS</button>
+                <button type="button" id="aerodeck-share-atis-dest" class="aerodeck-btn secondary" style="margin:0;width:auto;padding:6px 10px;font-size:10px;">Share dest ATIS</button>
+            </div>
+            <div id="aerodeck-chat-messages" class="aerodeck-chat-messages"></div>
+            <div id="aerodeck-mention-dd" class="aerodeck-mention-dd" style="display:none;"></div>
+            <div class="aerodeck-chat-input-row">
+                <input id="aerodeck-chat-input" class="aerodeck-input" type="text" placeholder="Message… type @ to mention" maxlength="200" autocomplete="off">
+                <button id="aerodeck-chat-send" class="aerodeck-btn">SEND</button>
+            </div>
+        </div>`;
+        const input = container.querySelector('#aerodeck-chat-input');
+        const dd = container.querySelector('#aerodeck-mention-dd');
+        let mentionIdx = 0;
+        function hideMention() { dd.style.display = 'none'; dd.innerHTML = ''; }
+        function mentionCandidates(query) {
+            const q = (query || '').toLowerCase();
+            const names = knownPilotNames(profile).filter((n) => !profile || n.toLowerCase() !== (profile.name || '').toLowerCase());
+            return names.filter((n) => !q || n.toLowerCase().includes(q)).slice(0, 8);
+        }
+        function showMention(query) {
+            const list = mentionCandidates(query);
+            if (!list.length) { hideMention(); return; }
+            mentionIdx = 0;
+            dd.innerHTML = list.map((n, i) => `<button type="button" data-name="${escapeHtml(n)}" class="${i === 0 ? 'active' : ''}">@${escapeHtml(n)}</button>`).join('');
+            dd.style.display = 'block';
+            dd.querySelectorAll('button').forEach((b) => {
+                b.onmousedown = (e) => { e.preventDefault(); insertMention(b.getAttribute('data-name')); };
+            });
+        }
+        function insertMention(name) {
+            const v = input.value;
+            const caret = input.selectionStart || v.length;
+            const before = v.slice(0, caret);
+            const after = v.slice(caret);
+            const at = before.lastIndexOf('@');
+            if (at < 0) return;
+            input.value = before.slice(0, at) + '@' + name + ' ' + after;
+            hideMention();
+            input.focus();
+            const pos = at + name.length + 2;
+            input.setSelectionRange(pos, pos);
+        }
+        function updateMentionFromInput() {
+            const v = input.value;
+            const caret = input.selectionStart || v.length;
+            const before = v.slice(0, caret);
+            const m = before.match(/@([^@]*)$/);
+            if (!m) { hideMention(); return; }
+            // only open when @ is start or after space
+            const atPos = before.lastIndexOf('@');
+            if (atPos > 0 && !/\s/.test(before[atPos - 1])) { hideMention(); return; }
+            showMention(m[1]);
+        }
         const doSend = () => {
-            const input = container.querySelector('#aerodeck-chat-input');
             const text = input.value.trim();
             if (!text || !profile) return;
             input.value = '';
+            hideMention();
             sendChatMessage(profile, text).then(() => fetchAndRenderChat());
         };
         container.querySelector('#aerodeck-chat-send').onclick = doSend;
-        container.querySelector('#aerodeck-chat-input').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); doSend(); } };
+        input.oninput = () => updateMentionFromInput();
+        input.onkeydown = (e) => {
+            if (dd.style.display === 'block') {
+                const buttons = Array.from(dd.querySelectorAll('button'));
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    mentionIdx = Math.min(buttons.length - 1, mentionIdx + 1);
+                    buttons.forEach((b, i) => b.classList.toggle('active', i === mentionIdx));
+                    return;
+                }
+                if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    mentionIdx = Math.max(0, mentionIdx - 1);
+                    buttons.forEach((b, i) => b.classList.toggle('active', i === mentionIdx));
+                    return;
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                    if (buttons[mentionIdx]) {
+                        e.preventDefault();
+                        insertMention(buttons[mentionIdx].getAttribute('data-name'));
+                        return;
+                    }
+                }
+                if (e.key === 'Escape') { hideMention(); return; }
+            }
+            if (e.key === 'Enter') { e.preventDefault(); doSend(); }
+        };
+        function shareAtis(which) {
+            if (!profile) return;
+            const apt = which === 'dest' ? flight.destination : flight.origin;
+            if (!apt) { alert('Set origin/destination in Flight first.'); return; }
+            const cached = metarMemCache[apt.icao];
+            if (!cached || !cached.result || cached.result.error) { alert('No ATIS/METAR loaded yet for ' + apt.icao); return; }
+            const atis = decodeMetarToAtis(cached.result.raw, apt.icao);
+            let msg;
+            if (atis) {
+                msg = `ATIS ${apt.icao}: ${atis.time || ''} Wind ${atis.wind || '—'} Vis ${atis.vis || '—'} ${atis.clouds || ''} ${atis.temp || ''}/${atis.dew || ''} QNH ${atis.qnh || '—'}`.replace(/\s+/g, ' ').trim();
+            } else {
+                msg = `METAR ${apt.icao}: ${cached.result.raw}`;
+            }
+            sendChatMessage(profile, msg.slice(0, 200)).then(() => fetchAndRenderChat());
+        }
+        const sO = container.querySelector('#aerodeck-share-atis-orig');
+        const sD = container.querySelector('#aerodeck-share-atis-dest');
+        if (sO) sO.onclick = () => shareAtis('origin');
+        if (sD) sD.onclick = () => shareAtis('dest');
         fetchAndRenderChat();
     }
 
@@ -2707,10 +3163,15 @@ function applySimbriefToFlight() {
     function renderSettingsTab(container, profile) {
         const b = computeBadge(profile.id);
         const theme = getTheme();
+        const clLines = isUpdateAvailable() ? changelogBulletsFor(remoteVersion) : [];
+        const clHtml = clLines.length
+            ? `<ul class="aerodeck-changelog-list">${clLines.map((l) => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`
+            : `<div class="aerodeck-airline-meta" style="margin-top:6px;">See CHANGELOG.md on GitHub for details.</div>`;
         const updateBanner = isUpdateAvailable()
             ? `<div class="aerodeck-card" style="margin-bottom:10px;border-color:var(--accent,#22d3ee);">
                     <div class="aerodeck-airline-name" style="font-size:12px;">Update available — v${escapeHtml(remoteVersion)}</div>
                     <div class="aerodeck-airline-meta">You are on v${escapeHtml(SCRIPT_VERSION)}</div>
+                    ${clHtml}
                     <a id="aerodeck-update-link" class="aerodeck-btn secondary" style="display:inline-block;margin-top:8px;text-align:center;text-decoration:none;"
                        href="${RELEASES_URL}" target="_blank" rel="noopener">Open update page</a>
                </div>`
@@ -2728,6 +3189,13 @@ function applySimbriefToFlight() {
                         <div class="aerodeck-profile-badge">${escapeHtml(b.tier)} · ${b.hours.toFixed(1)}h</div>
                     </div>
                 </div>
+            </div>
+            <div class="aerodeck-label">Notifications</div>
+            <div class="aerodeck-card">
+                <label class="aerodeck-map-toggle" style="display:flex;align-items:center;gap:8px;">
+                    <input type="checkbox" id="aerodeck-mention-alerts" ${getMentionAlertsEnabled() ? 'checked' : ''}>
+                    Alert when someone @mentions you (sound + strip flash)
+                </label>
             </div>
             <div class="aerodeck-label">Career</div>
             <div class="aerodeck-track-grid">
@@ -2776,6 +3244,8 @@ function applySimbriefToFlight() {
             <div class="aerodeck-data-status">${dataStatus === 'ready' ? 'Data loaded' : dataStatus === 'loading' ? 'Loading data…' : 'Data load failed — using cache'}</div>
         `;
         container.querySelectorAll('[data-theme]').forEach((btn) => { btn.onclick = () => { setTheme(btn.getAttribute('data-theme')); render(); }; });
+        const ment = container.querySelector('#aerodeck-mention-alerts');
+        if (ment) ment.onchange = () => { setMentionAlertsEnabled(ment.checked); };
         const resetLink = container.querySelector('#aerodeck-reset-profile'); if (resetLink) resetLink.onclick = () => { confirmingResetProfile = true; render(); };
         const resetYes = container.querySelector('#aerodeck-reset-yes'); if (resetYes) resetYes.onclick = () => { clearProfile(); confirmingResetProfile = false; flight = blankFlight(); render(); };
         const resetNo = container.querySelector('#aerodeck-reset-no'); if (resetNo) resetNo.onclick = () => { confirmingResetProfile = false; render(); };
@@ -2899,6 +3369,12 @@ function applySimbriefToFlight() {
                 const n = parseInt(raw, 10);
                 if (!raw || isNaN(n) || n <= 0) { flight.paxError = 'Enter a valid passenger count.'; render(); return; }
                 if (flight.capacity != null && n > flight.capacity) { flight.paxError = `This aircraft can't carry ${n} passengers (capacity ~${flight.capacity}).`; render(); return; }
+                const d1L = (flight.doors || []).find((d) => d.id === 'L1');
+                if (d1L && !d1L.open) {
+                    flight.paxError = 'Open boarding door (DOOR 1L) to board passengers.';
+                    render();
+                    return;
+                }
                 flight.paxError = null; flight.paxTarget = n; flight.boardingStatus = 'boarding'; flight.boardingStartTs = Date.now();
                 flight.boardingDurationMs = Math.min(180000, Math.max(25000, n * 350));
                 render();
@@ -3078,6 +3554,7 @@ function renderSidebar(sidebarEl) {
                 <div class="aerodeck-nav-item ${activeTab === 'gallery' ? 'active' : ''}" data-tab="gallery">${ICON_GALLERY}<span>Gallery</span></div>
                 <div class="aerodeck-nav-item ${activeTab === 'map' ? 'active' : ''}" data-tab="map">${ICON_MAP}<span>Map</span></div>
                 <div class="aerodeck-nav-item ${activeTab === 'chat' ? 'active' : ''}" data-tab="chat">${ICON_CHAT}<span>Chat</span></div>
+                <div class="aerodeck-nav-item ${activeTab === 'leaderboard' ? 'active' : ''}" data-tab="leaderboard">${ICON_LEADER}<span>Board</span></div>
                 <div class="aerodeck-nav-item ${activeTab === 'checklist' ? 'active' : ''}" data-tab="checklist">${ICON_CHECK}<span>Checklist</span></div>
                 <div class="aerodeck-nav-item ${activeTab === 'history' ? 'active' : ''}" data-tab="history">${ICON_HISTORY}<span>History</span></div>
                 <div class="aerodeck-nav-item ${activeTab === 'settings' ? 'active' : ''}" data-tab="settings">${ICON_SETTINGS}<span>Settings</span></div>
@@ -3158,6 +3635,7 @@ function renderSidebar(sidebarEl) {
         else if (activeTab === 'charts') renderChartsTab(content);
         else if (activeTab === 'map') renderMapTab(content);
         else if (activeTab === 'chat') renderChatTab(content, profile);
+        else if (activeTab === 'leaderboard') renderLeaderboardTab(content, profile);
         else if (activeTab === 'checklist') renderChecklistTab(content, profile);
         else if (activeTab === 'settings') renderSettingsTab(content, profile);
         else renderHistoryTab(content, profile);
