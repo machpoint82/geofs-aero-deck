@@ -14,7 +14,7 @@ AeroDeck turns a GeoFS flight into something closer to a real commercial operati
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-userscript-green?)](https://www.tampermonkey.net/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey?)](LICENSE)
 
-> **Status:** v1.0.0 testing build. Features and tab layout are still evolving.
+> **Status:** v1.0.3 testing build. Features and tab layout are still evolving.
 
 **Repository:** [github.com/machpoint82/geofs-aero-deck](https://github.com/machpoint82/geofs-aero-deck)
 
