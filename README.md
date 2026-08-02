@@ -9,7 +9,7 @@
 AeroDeck turns a GeoFS flight into something closer to a real commercial operation — pilot registration and career progression, automatic airline/airport/aircraft detection, real weather, live airport diagrams, a live moving map, other-pilot tracking and chat, a full pre-flight checklist, and SimBrief integration for real passenger/cargo/fuel numbers instead of guesses.
 
 ![HomeSpace]( https://img.shields.io/badge/github-repo-blue?logo=github)
-[![Version](https://img.shields.io/badge/version-1.0.1-cyan?)](https://github.com/machpoint82/geofs-aero-deck/releases)
+[![Version](https://img.shields.io/badge/version-1.0.2-cyan?)](https://github.com/machpoint82/geofs-aero-deck/releases)
 [![GeoFS](https://img.shields.io/badge/GeoFS-3.9%20%7C%204.0-blue?)](https://www.geo-fs.com/)
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-userscript-green?)](https://www.tampermonkey.net/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey?)](LICENSE)
